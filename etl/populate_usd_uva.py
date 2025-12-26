@@ -29,7 +29,7 @@ def to_iso_date_string(dt):
     return dt.strftime('%Y-%m-%d')
 
 
-def run_pair(symbol: str, data_rows: list, db: DoltDBManager, pair: str):
+def run_pair(symbol: str, data_rows: list, db: DoltDBManager, pair: str, local_mode: bool = False):
     """
     Processes and inserts data for a specific currency pair
     
@@ -38,15 +38,19 @@ def run_pair(symbol: str, data_rows: list, db: DoltDBManager, pair: str):
         data_rows: List of data to insert (each row must have 'date', 'kind', 'rate')
         db: Database manager
         pair: Currency pair (e.g., 'USD_ARS', 'UVA_ARS')
+        local_mode: If True, skip dolt pull/add/commit/push operations
     """
     try:
         print(f"\n{'='*70}")
         print(f"📊 Processing: {symbol} ({pair})")
         print(f"{'='*70}")
         
-        # 1. Pull (use CLI: dolt pull)
-        pull_res = db.dolt_pull()
-        print(f"✅ dolt_pull: {pull_res}")
+        # 1. Pull (use CLI: dolt pull) - Skip in local mode
+        if not local_mode:
+            pull_res = db.dolt_pull()
+            print(f"✅ dolt_pull: {pull_res}")
+        else:
+            print("ℹ️  Local mode: Skipping dolt_pull")
 
         # 2. Filter today's data to avoid duplicates
         today = to_iso_date_string(datetime.now())
@@ -70,17 +74,22 @@ def run_pair(symbol: str, data_rows: list, db: DoltDBManager, pair: str):
                 print(f"⚠️  Error inserting {dp}: {e}")
                 continue
         
-        # 4. Dolt operations (use CLI for add/commit/push)
-        add_res = db.dolt_add('fx_rate')
-        commit_msg = f"fx_rate update {symbol} {to_iso_date_string(datetime.now())}"
-        commit_res = db.dolt_commit(commit_msg)
-        push_res = db.dolt_push()
-        
-        print(f"\n✅ Completed {symbol}:")
-        print(f"   - Records successfully inserted: {len(insert_results)}")
-        print(f"   - dolt_add: {add_res}")
-        print(f"   - dolt_commit: {commit_res}")
-        print(f"   - dolt_push: {push_res}")
+        # 4. Dolt operations (use CLI for add/commit/push) - Skip in local mode
+        if not local_mode:
+            add_res = db.dolt_add('fx_rate')
+            commit_msg = f"fx_rate update {symbol} {to_iso_date_string(datetime.now())}"
+            commit_res = db.dolt_commit(commit_msg)
+            push_res = db.dolt_push()
+            
+            print(f"\n✅ Completed {symbol}:")
+            print(f"   - Records successfully inserted: {len(insert_results)}")
+            print(f"   - dolt_add: {add_res}")
+            print(f"   - dolt_commit: {commit_res}")
+            print(f"   - dolt_push: {push_res}")
+        else:
+            print(f"\n✅ Completed {symbol} (local mode):")
+            print(f"   - Records successfully inserted: {len(insert_results)}")
+            print(f"   - Dolt operations skipped (local mode)")
         print(f"{'='*70}\n")
         
         return True
@@ -90,9 +99,14 @@ def run_pair(symbol: str, data_rows: list, db: DoltDBManager, pair: str):
         return False
 
 
-def run(start_date: date, end_date: date = None):
+def run(start_date: date, end_date: date | None = None, local_mode: bool = False):
     """
     Main ETL function
+    
+    Args:
+        start_date: Start date for data fetch
+        end_date: End date for data fetch (default: now)
+        local_mode: If True, skip dolt pull/add/commit/push operations
     """
     if end_date is None:
         end_date = datetime.now()
@@ -116,7 +130,7 @@ def run(start_date: date, end_date: date = None):
         uva_data = fetch_uva_data()
         
         if uva_data:
-            run_pair('UVA', uva_data, db, pair='UVA_ARS')
+            run_pair('UVA', uva_data, db, pair='UVA_ARS', local_mode=local_mode)
         
         # 4. Fetch and load USD data
         # Each fetch returns bid/ask rates (mid can be calculated at query time)
@@ -132,7 +146,7 @@ def run(start_date: date, end_date: date = None):
             usd_data = fetch_ambito_dolar(kind, start_str, end_str)
             
             if usd_data:
-                run_pair(symbol, usd_data, db, pair=pair)
+                run_pair(symbol, usd_data, db, pair=pair, local_mode=local_mode)
         
         print("\n" + "="*70)
         print("✅ ETL COMPLETED SUCCESSFULLY")
@@ -148,13 +162,37 @@ def run(start_date: date, end_date: date = None):
 
 
 if __name__ == "__main__":
-    end_date = datetime.now()
-    start_date = datetime(2025, 10, 1) 
-    # start_date = datetime(2024, 9, 1)  # From convertibilidad exit
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='ETL to populate fx_rate with UVA and USD data')
+    parser.add_argument('--local', action='store_true', 
+                        help='Local mode: skip dolt pull/add/commit/push operations')
+    parser.add_argument('--start-date', type=str, default=None,
+                        help='Start date (YYYY-MM-DD), default: 2025-10-01')
+    parser.add_argument('--end-date', type=str, default=None,
+                        help='End date (YYYY-MM-DD), default: today')
+    
+    args = parser.parse_args()
+    
+    # Parse dates
+    if args.start_date:
+        start_date = datetime.strptime(args.start_date, '%Y-%m-%d')
+    else:
+        start_date = datetime(2025, 10, 1)
+        # start_date = datetime(2024, 9, 1)  # From convertibilidad exit
+    
+    if args.end_date:
+        end_date = datetime.strptime(args.end_date, '%Y-%m-%d')
+    else:
+        end_date = datetime.now()
+    
     # Configure environment variables if not set
     if not os.getenv('DOLT_DB'):
         # Default configuration for local server
         os.environ['DOLT_DB'] = 'mysql://user:@localhost:3306/macroeconomia'
         print(f"ℹ️  Using default DOLT_DB: {os.environ['DOLT_DB']}\n")
     
-    run(start_date, end_date)
+    if args.local:
+        print("ℹ️  Running in LOCAL MODE (skipping dolt operations)\n")
+    
+    run(start_date, end_date, local_mode=args.local)
