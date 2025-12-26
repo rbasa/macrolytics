@@ -65,34 +65,69 @@ def fetch_ambito_dolar(kind, start_date, end_date):
         print("⚠️  No data found in response")
         return []
     
+    # Show sample of parsed data for debugging
+    print(f"📦 Parsed {len(parsed)} raw records from API")
+    if len(parsed) > 0:
+        print(f"   First record (raw): {parsed[0]}")
+        if len(parsed) > 1:
+            print(f"   Last record (raw): {parsed[-1]}")
+    
     # Convert to standardized format for fx_rate table
     # Returns bid and ask rates only (mid can be calculated at query time)
+    # IMPORTANT: We do NOT modify dates - we only convert format DD/MM/YYYY to YYYY-MM-DD
+    # If API returns duplicates, INSERT IGNORE in the database will handle them via PRIMARY KEY
     usd_data = []
+    parsing_errors = []
+    
     for item in parsed:
-        # Convert date DD/MM/YYYY to YYYY-MM-DD
-        fecha_dt = pd.to_datetime(item['fecha'], format='%d/%m/%Y')
-        fecha_str = fecha_dt.strftime('%Y-%m-%d')
-        
-        # Parse buy (bid) and sell (ask) rates
-        compra = parse_number(item['compra'])  # bid
-        venta = parse_number(item['venta'])     # ask
-        
-        if compra and venta:
-            # Add bid rate (compra)
-            usd_data.append({
-                'date': fecha_str,
-                'kind': 'bid',
-                'rate': compra
-            })
+        try:
+            # Convert date DD/MM/YYYY to YYYY-MM-DD (format conversion only, no date modification)
+            fecha_raw = item.get('fecha', '')
+            fecha_dt = pd.to_datetime(fecha_raw, format='%d/%m/%Y')
+            fecha_str = fecha_dt.strftime('%Y-%m-%d')
             
-            # Add ask rate (venta)
-            usd_data.append({
-                'date': fecha_str,
-                'kind': 'ask',
-                'rate': venta
-            })
+            # Parse buy (bid) and sell (ask) rates
+            compra_raw = item.get('compra', '')
+            venta_raw = item.get('venta', '')
+            compra = parse_number(compra_raw)  # bid
+            venta = parse_number(venta_raw)     # ask
+            
+            if compra and venta:
+                # Add bid rate (compra)
+                usd_data.append({
+                    'date': fecha_str,
+                    'kind': 'bid',
+                    'rate': compra
+                })
+                
+                # Add ask rate (venta)
+                usd_data.append({
+                    'date': fecha_str,
+                    'kind': 'ask',
+                    'rate': venta
+                })
+            else:
+                parsing_errors.append(f"Date {fecha_raw}: Missing compra={compra_raw} or venta={venta_raw}")
+        except Exception as e:
+            parsing_errors.append(f"Date {item.get('fecha', 'UNKNOWN')}: Parsing error - {e}")
+    
+    if parsing_errors:
+        print(f"⚠️  Parsing errors (showing first 10):")
+        for error in parsing_errors[:10]:
+            print(f"   {error}")
+        if len(parsing_errors) > 10:
+            print(f"   ... ({len(parsing_errors) - 10} more errors)")
     
     print(f"✅ Processed {len(usd_data)} USD records (bid/ask)")
+    
+    # Note: If API returns duplicate dates, INSERT IGNORE will handle them
+    # We do NOT deduplicate here - the database PRIMARY KEY (DATE, pair, kind) handles duplicates
+    
+    # Show sample of parsed dates for debugging
+    if usd_data:
+        sample_dates = sorted(set([item['date'] for item in usd_data[:20]]))
+        print(f"   Sample dates: {sample_dates[:5]} ... (showing first 5 unique dates)")
+    
     return usd_data
 
 if __name__ == "__main__":
