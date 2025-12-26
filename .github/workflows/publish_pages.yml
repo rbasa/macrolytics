@@ -1,0 +1,32 @@
+name: Publish to GitHub Pages
+
+on:
+  # Allow manual trigger
+  workflow_dispatch:
+  
+  # Run on push to main branch (when docs/index.html changes)
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - '.github/workflows/publish_pages.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          cname: false
+          commit_message: "🚀 Deploy index.html to GitHub Pages - ${{ github.sha }}"
+
