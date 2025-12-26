@@ -29,6 +29,7 @@ wheels/
 *.ipynb_checkpoints/
 *.html
 !README.html  # Allow README.html if you want to publish it
+!docs/*.html  # Allow HTML files in docs/ for GitHub Pages
 
 # Environment variables
 .env
@@ -44,7 +45,9 @@ wheels/
 
 # Dolt database files (local only)
 dolt_db/
+macroeconomia/
 .dolt/
+server.log
 
 # IDE
 .vscode/

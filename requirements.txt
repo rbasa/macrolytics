@@ -1,6 +1,7 @@
 ipykernel
 jupyter
 jupyterlab
+nbconvert>=6.0.0
 pandas>=1.5
 numpy
 gspread
