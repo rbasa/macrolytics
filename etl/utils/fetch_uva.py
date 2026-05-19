@@ -7,7 +7,6 @@ To run:
     python -m etl.utils.fetch_uva
 """
 
-import pandas as pd
 from .utils import try_fetch, BROWSER_HEADERS
 
 
@@ -30,25 +29,44 @@ def fetch_uva_data():
         print(f"❌ HTTP Error {resp.status_code}")
         print(f"Response text (first 300 chars):\n{resp.text[:300]}")
         return []
-    
-    # Parse response and convert to standardized format
-    raw_data = resp.json()
-    
-    if not raw_data:
-        print("⚠️  No UVA data received")
+
+    try:
+        raw_data = resp.json()
+    except Exception as e:
+        print(f"❌ Could not parse JSON: {e}")
         return []
-    
-    # Convert to standardized format for fx_rate table
-    # UVA is a reference index, so kind = 'index'
+
+    if not isinstance(raw_data, list):
+        print(f"❌ Unexpected payload type: {type(raw_data)}")
+        print(f"Payload preview: {str(raw_data)[:300]}")
+        return []
+
     uva_data = []
-    for item in raw_data:
+    for i, item in enumerate(raw_data):
+        if not isinstance(item, dict):
+            continue
+
+        fecha = item.get("fecha")
+        valor = item.get("valor")
+
+        if fecha is None or valor is None:
+            print(f"⚠️ Skipping row {i}: missing fecha/valor -> {item}")
+            continue
+
+        try:
+            rate = float(valor)
+        except Exception:
+            print(f"⚠️ Skipping row {i}: invalid valor -> {valor}")
+            continue
+
         uva_data.append({
-            'date': item['fecha'],      # Already in YYYY-MM-DD format
-            'kind': 'index',            # UVA is a reference index
-            'rate': item['valor']       # Already a float
+        "date": fecha,
+        "value": rate
         })
-    
-    print(f"✅ Fetched {len(uva_data)} UVA records (index)")
+
+    uva_data.sort(key=lambda x: x["date"])
+
+    print(f"✅ Fetched {len(uva_data)} UVA records")
     return uva_data
 
 if __name__ == "__main__":
@@ -63,8 +81,8 @@ if __name__ == "__main__":
         print("="*70)
         print("First 5 records:")
         for item in data[:5]:
-            print(f"  {item['date']} | Rate: ${item['rate']:.2f}")
+            print(f"  {item['date']} | Rate: ${item['value']:.2f}")
         print("\nLast 5 records:")
         for item in data[-5:]:
-            print(f"  {item['date']} | Rate: ${item['rate']:.2f}")
+            print(f"  {item['date']} | Rate: ${item['value']:.2f}")
         print("="*70 + "\n")
