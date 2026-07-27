@@ -81,3 +81,4 @@ dolt_db/
 config.yaml
 **/config.yaml
 
+**/.doltcfg/
