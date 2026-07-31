@@ -11,4 +11,6 @@ openpyxl   # para leer archivos Excel
 statsmodels
 requests>=2.25.0
 pymysql>=1.0.0
+python-dateutil
+xlrd>=2.0.1
 

@@ -170,6 +170,7 @@ jobs:
         env:
           DOLT_DB: "mysql://user:@localhost:3306/macroeconomia"
           UPDATE_DAYS: ${{ github.event.inputs.days_back || '7' }}
+          IPC_LAST_PERIODS: '5'
         run: |
           set -euo pipefail
 
@@ -198,61 +199,15 @@ jobs:
 
           cd ..
 
-          echo "Running Python ETL with DOLT_DB=$DOLT_DB, UPDATE_DAYS=$UPDATE_DAYS"
+          echo "Running Python daily FX and UVA ETL with DOLT_DB=$DOLT_DB, UPDATE_DAYS=$UPDATE_DAYS"
           python etl/daily_update.py
-
-          # Commit changes if any
-          cd macroeconomia
-          echo "Checking for changes..."
-          dolt status
-          echo ""
-          echo "Checking diff..."
-          DIFF_OUTPUT=$(dolt diff --stat 2>&1 || true)
-          echo "$DIFF_OUTPUT"
+          echo "Running Argentina IPC ETL..."
+          python etl/populate_ipc_arg.py
+          echo "Running Argentina EMAE ETL..."
+          python etl/populate_emae_arg.py
           
-          if echo "$DIFF_OUTPUT" | grep -q "Diff\|Rows\|Changes"; then
-            echo "✅ Changes detected, committing..."
-            dolt add -A
-            dolt commit -m "Daily ETL update $(date -u '+%Y-%m-%d %H:%M UTC')"
-            echo "✅ Committed successfully"
-            echo ""
-            echo "Pushing to DoltHub..."
-            echo "   Checking remote configuration..."
-            dolt remote -v
-            echo ""
-            echo "   Attempting push..."
-            PUSH_OUTPUT=$(dolt push origin main 2>&1)
-            PUSH_EXIT=$?
-            
-            if [ $PUSH_EXIT -eq 0 ]; then
-              echo "✅ Successfully pushed to DoltHub"
-            else
-              echo "$PUSH_OUTPUT"
-              echo ""
-              # Check if error is "already up to date" (this is OK)
-              if echo "$PUSH_OUTPUT" | grep -qi "up to date\|already.*up.*to.*date\|nothing to push"; then
-                echo "ℹ️  Remote is already up to date (this is OK)"
-              # Check if error is authentication-related (this is a problem)
-              elif echo "$PUSH_OUTPUT" | grep -qi "authentication\|unauthorized\|credential\|permission denied"; then
-                echo "❌ Authentication error - credentials may not be configured correctly"
-                echo ""
-                echo "   Debugging info:"
-                echo "   Available credentials:"
-                dolt creds ls 2>&1 || echo "   (Could not list credentials)"
-                echo ""
-                echo "   Credential files:"
-                ls -la ~/.dolt/creds/ 2>&1 || echo "   (Could not list credential files)"
-                exit 1
-              else
-                echo "⚠️  Push failed (exit code: $PUSH_EXIT)"
-                echo "   This may be a temporary network issue"
-                echo "   The commit was successful, so data is safe locally"
-                # Don't fail the workflow for network issues
-              fi
-            fi
-          else
-            echo "ℹ️  No changes detected (data may already be up to date)"
-          fi
+          echo "Pushing commits to DoltHub..."
+          dolt push origin main
 
           # Stop server
           if [ -f /tmp/dolt_server.pid ]; then

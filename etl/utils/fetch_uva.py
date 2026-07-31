@@ -55,6 +55,8 @@ def fetch_uva_data():
             "rate": valor
         })
 
+    return uva_data
+
 if __name__ == "__main__":
     print("\n" + "🇦🇷" * 35)
     print("   UVA DATA FETCH SCRIPT - ARGENTINA DATOS API")
