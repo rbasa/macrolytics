@@ -207,6 +207,7 @@ jobs:
           python etl/populate_emae_arg.py
           
           echo "Pushing commits to DoltHub..."
+          cd macroeconomia
           dolt push origin main
 
           # Stop server
