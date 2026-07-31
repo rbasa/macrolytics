@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análisis UVA - Macroanálisis</title>
+    <link rel="stylesheet" href="../styles/main.css">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Análisis UVA</h1>
+            <p class="subtitle">Análisis de la Unidad de Valor Adquisitivo (UVA) y tipos de cambio</p>
+            <p class="last-updated" id="lastUpdated">Cargando datos...</p>
+        </header>
+
+        <div id="loading" class="loading">
+            <div class="loading-spinner"></div>
+            <p>Cargando datos...</p>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="content" style="display: none;">
+            <div class="stats" id="stats"></div>
+
+            <div class="chart-row">
+            <div class="chart-column chart-column--wide">
+                <div class="chart-container">
+                    <h2 class="chart-title">UVA Blue vs UVA Oficial</h2>
+                    <div id="chart1" class="chart"></div>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <footer>
+            <p>Datos actualizados diariamente desde <a href="https://www.dolthub.com/repositories/rbasa/macroeconomia" target="_blank">DoltHub</a></p>
+            <p>Repositorio: <a href="https://github.com/rbasa/uvausd" target="external">https://github.com/rbasa/uvausd</a></p>
+            <p><a href="../index.html">Volver al índice</a></p>
+        </footer>
+    </div>
+
+    <script src="../js/navbar.js" defer></script>
+    <script src="js/uva.js" defer></script>
+</body>
+</html>

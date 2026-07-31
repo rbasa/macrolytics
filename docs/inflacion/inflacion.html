@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análisis Inflación - Macroanálisis</title>
+    <link rel="stylesheet" href="../styles/main.css">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📈 Análisis de Inflación</h1>
+            <p class="subtitle">IPC Argentina - últimos datos y desagregación</p>
+            <p class="last-updated" id="lastUpdated">Cargando datos...</p>
+        </header>
+
+        <div id="loading" class="loading">
+            <div class="loading-spinner"></div>
+            <p>Cargando datos de IPC...</p>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="content" style="display: none;">
+            <div class="stats" id="stats"></div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem;">
+                <div class="chart-container">
+                    <h2 class="chart-title">Inflación mensual (últimos 12 meses)</h2>
+                    <div id="chart_monthly" class="chart"></div>
+                </div>
+
+                <div class="chart-container">
+                    <h2 class="chart-title">Inflación interanual (últimos 12 meses)</h2>
+                    <div id="chart_interannual" class="chart"></div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <h2 class="chart-title">Variaciones por componente</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem;">
+                    <div>
+                        <h3 class="chart-title" style="font-size: 1rem; margin-bottom: 0.5rem;">Mensual</h3>
+                        <div id="chart_latest_monthly" class="chart"></div>
+                    </div>
+                    <div>
+                        <h3 class="chart-title" style="font-size: 1rem; margin-bottom: 0.5rem;">Interanual</h3>
+                        <div id="chart_latest_interannual" class="chart"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <h2 class="chart-title">Variaciones de series agregadas</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem;">
+                    <div>
+                        <h3 class="chart-title" style="font-size: 1rem; margin-bottom: 0.5rem;">Mensual</h3>
+                        <div id="chart_series_monthly" class="chart"></div>
+                    </div>
+                    <div>
+                        <h3 class="chart-title" style="font-size: 1rem; margin-bottom: 0.5rem;">Interanual</h3>
+                        <div id="chart_series_interannual" class="chart"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>Datos actualizados diariamente desde <a href="https://apis.datos.gob.ar/">Datos Argentina</a></p>
+            <p>Repositorio: <a href="https://github.com/rbasa/uvausd" target="external">https://github.com/rbasa/uvausd</a></p>
+            <p><a href="../index.html">Volver al índice</a></p>
+        </footer>
+    </div>
+
+    <script src="../js/navbar.js" defer></script>
+    <script src="js/inflacion.js" defer></script>
+</body>
+</html>
