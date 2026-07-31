@@ -1,0 +1,408 @@
+// Configuration
+const DOLTHUB_OWNER = 'rbasa';
+const DOLTHUB_REPO = 'macroeconomia';
+const DOLTHUB_BRANCH = 'main';
+const BASE_URL = `https://www.dolthub.com/api/v1alpha1/${DOLTHUB_OWNER}/${DOLTHUB_REPO}/${DOLTHUB_BRANCH}`;
+
+// Fetch data from DoltHub API
+async function fetchDoltHubData(sqlQuery) {
+    const params = new URLSearchParams({ q: sqlQuery });
+    const url = `${BASE_URL}?${params.toString()}`;
+    
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data.rows || [];
+    } catch (error) {
+        console.error('Error fetching data:', error);
+        throw error;
+    }
+}
+
+// Helper function to format date as YYYY-MM-DD in local timezone
+function formatLocalDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+// Fetch all data in chunks to avoid DoltHub endpoint limitations
+async function fetchAllData(pairs, startDate = '2017-01-01', chunkMonths = 6) {
+    const today = new Date();
+    // Use a date far in the future to ensure we get all available data
+    const endDate = new Date('2099-12-31');
+    
+    const start = new Date(startDate);
+    const allChunks = [];
+    
+    let current = new Date(start);
+    const end = new Date(endDate);
+
+    console.log(`📊 Fetching data from ${startDate} onwards in chunks of ${chunkMonths} months...`);
+
+    while (current < end) {
+        const chunkEnd = new Date(current);
+        chunkEnd.setMonth(chunkEnd.getMonth() + chunkMonths);
+        if (chunkEnd > end) chunkEnd.setTime(end.getTime());
+
+        const pairsStr = pairs.map(p => `'${p}'`).join(', ');
+        const query = `
+            SELECT DATE, pair, kind, rate
+            FROM fx_rate
+            WHERE pair IN (${pairsStr})
+              AND DATE >= '${formatLocalDate(current)}'
+              AND DATE <= '${formatLocalDate(chunkEnd)}'
+            ORDER BY DATE ASC, pair ASC
+        `;
+
+        try {
+            const chunk = await fetchDoltHubData(query);
+            if (chunk.length > 0) {
+                allChunks.push(...chunk);
+                console.log(`✅ Fetched ${chunk.length} records for ${formatLocalDate(current)} to ${formatLocalDate(chunkEnd)}`);
+            } else {
+                // If no data in this chunk, we might have reached the end
+                // Continue to next chunk anyway to be safe
+                console.log(`ℹ️ No data found for ${formatLocalDate(current)} to ${formatLocalDate(chunkEnd)}`);
+            }
+        } catch (error) {
+            console.warn(`⚠️ Error fetching chunk ${formatLocalDate(current)} to ${formatLocalDate(chunkEnd)}: ${error.message}`);
+        }
+
+        current = chunkEnd;
+        
+        // If we got no data and we're past today, we've likely reached the end
+        // But continue a bit more to be safe
+        if (current > today && allChunks.length > 0) {
+            const lastDate = new Date(allChunks[allChunks.length - 1].DATE);
+            if (lastDate < current) {
+                console.log(`ℹ️ Reached end of available data at ${lastDate.toISOString().split('T')[0]}`);
+                break;
+            }
+        }
+    }
+
+    console.log(`✅ Total records fetched: ${allChunks.length}`);
+    if (allChunks.length > 0) {
+        const lastRecord = allChunks[allChunks.length - 1];
+        console.log(`📅 Last record date: ${lastRecord.DATE}`);
+    }
+    return allChunks;
+}
+
+// Transform data from long to wide format
+function transformToWide(data) {
+    // Create a map to store data with bid/ask tracking
+    const dataMap = {};
+    
+    data.forEach(row => {
+        const date = row.DATE;
+        const pair = row.pair;
+        const kind = row.kind;
+        const rate = parseFloat(row.rate);
+
+        if (!dataMap[date]) {
+            dataMap[date] = { fecha: date };
+        }
+
+        // Store UVA (index)
+        if (pair === 'UVA_ARS' && kind === 'index') {
+            dataMap[date].uva = rate;
+        }
+        // Store bid/ask rates for USD pairs
+        else if (pair === 'USD_ARS') {
+            if (kind === 'bid') {
+                dataMap[date].usd_bid = rate;
+            } else if (kind === 'ask') {
+                dataMap[date].usd_ask = rate;
+            }
+        } else if (pair === 'USDB_ARS') {
+            if (kind === 'bid') {
+                dataMap[date].usdb_bid = rate;
+            } else if (kind === 'ask') {
+                dataMap[date].usdb_ask = rate;
+            }
+        } else if (pair === 'USDM_ARS') {
+            if (kind === 'bid') {
+                dataMap[date].usdm_bid = rate;
+            } else if (kind === 'ask') {
+                dataMap[date].usdm_ask = rate;
+            }
+        } else if (pair === 'USDC_ARS') {
+            if (kind === 'bid') {
+                dataMap[date].usdc_bid = rate;
+            } else if (kind === 'ask') {
+                dataMap[date].usdc_ask = rate;
+            }
+        }
+    });
+
+    // Convert map to array and sort by date
+    const result = Object.values(dataMap).sort((a, b) => 
+        new Date(a.fecha) - new Date(b.fecha)
+    );
+
+    // Calculate mid-point (average of bid and ask) for each USD pair
+    // and then calculate UVA/USD ratios
+    result.forEach(row => {
+        // Calculate mid-point for USD pairs (average of bid and ask)
+        if (row.usd_bid !== undefined || row.usd_ask !== undefined) {
+            const bid = row.usd_bid || row.usd_ask;
+            const ask = row.usd_ask || row.usd_bid;
+            row.usd = (bid + ask) / 2;
+        }
+        
+        if (row.usdb_bid !== undefined || row.usdb_ask !== undefined) {
+            const bid = row.usdb_bid || row.usdb_ask;
+            const ask = row.usdb_ask || row.usdb_bid;
+            row.usdb = (bid + ask) / 2;
+        }
+        
+        if (row.usdm_bid !== undefined || row.usdm_ask !== undefined) {
+            const bid = row.usdm_bid || row.usdm_ask;
+            const ask = row.usdm_ask || row.usdm_bid;
+            row.usdm = (bid + ask) / 2;
+        }
+        
+        if (row.usdc_bid !== undefined || row.usdc_ask !== undefined) {
+            const bid = row.usdc_bid || row.usdc_ask;
+            const ask = row.usdc_ask || row.usdc_bid;
+            row.usdc = (bid + ask) / 2;
+        }
+
+        // Calculate UVA/USD ratios using mid-point
+        if (row.uva && row.usdb) {
+            row.uva_usdb = row.uva / row.usdb;
+        }
+        if (row.uva && row.usd) {
+            row.uva_usd = row.uva / row.usd;
+        }
+    });
+
+    return result;
+}
+
+// Create Plotly chart
+function createChart(containerId, traces, layout) {
+    // Detect mobile device
+    const isMobile = window.innerWidth <= 768;
+    
+    // Adjust margins for mobile
+    const margins = isMobile 
+        ? { l: 40, r: 10, t: 20, b: 70 }
+        : { l: 60, r: 30, t: 30, b: 80 };
+    
+    const defaultLayout = {
+        ...layout,
+        plot_bgcolor: 'white',
+        paper_bgcolor: 'white',
+        font: { 
+            family: 'Arial, sans-serif', 
+            size: isMobile ? 10 : 12 
+        },
+        hovermode: 'closest',
+        margin: margins
+    };
+
+    Plotly.newPlot(containerId, traces, defaultLayout, {
+        responsive: true,
+        displayModeBar: false
+    });
+    
+    // Handle window resize for mobile optimization
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            Plotly.Plots.resize(containerId);
+        }, 250);
+    });
+}
+
+// Main function to load and display data
+async function loadData() {
+    try {
+        const pairs = ['UVA_ARS', 'USD_ARS', 'USDB_ARS'];
+        // Fetch all data from 2017 onwards in chunks to avoid endpoint limitations
+        const rawData = await fetchAllData(pairs, '2017-01-01', 6);
+        
+        if (rawData.length === 0) {
+            throw new Error('No se encontraron datos');
+        }
+
+        const df = transformToWide(rawData);
+        
+        // Filter to only dates where we have UVA data
+        const dfFiltered = df.filter(row => row.uva);
+
+        // Update last updated time
+        const lastUpdatedEl = document.getElementById('lastUpdated');
+        if (lastUpdatedEl) {
+            lastUpdatedEl.textContent = `Última actualización: ${new Date().toLocaleString('es-AR')}`;
+        }
+
+        // Calculate stats
+        const stats = calculateStats(dfFiltered);
+        displayStats(stats);
+
+        // Create chart
+        createChart1(dfFiltered); // UVA Blue vs UVA Oficial
+
+        // Hide loading, show content
+        const loadingEl = document.getElementById('loading');
+        if (loadingEl) loadingEl.style.display = 'none';
+        const contentEl = document.getElementById('content');
+        if (contentEl) contentEl.style.display = 'block';
+
+    } catch (error) {
+        console.error('Error loading data:', error);
+        const loadingEl = document.getElementById('loading');
+        if (loadingEl) loadingEl.style.display = 'none';
+        const errorEl = document.getElementById('error');
+        if (errorEl) {
+            errorEl.style.display = 'block';
+            errorEl.textContent = `Error al cargar los datos: ${error.message}`;
+        }
+    }
+}
+
+function calculateStats(df) {
+    const lastRow = df.length > 0 ? df[df.length - 1] : null;
+    
+    // Find last valid values for each metric (going backwards)
+    let lastUVA = null, lastUVADate = null;
+    let lastUSDBlue = null, lastUSDBlueDate = null;
+    let lastUSDOficial = null, lastUSDOficialDate = null;
+    let lastUSDBValue = null, lastUSDBDate = null;
+    let lastUSDValue = null, lastUSDDate = null;
+    
+    for (let i = df.length - 1; i >= 0; i--) {
+        const row = df[i];
+        
+        if (!lastUVA && row.uva) {
+            lastUVA = row.uva;
+            lastUVADate = row.fecha;
+        }
+        
+        if (!lastUSDBlue && row.uva_usdb) {
+            lastUSDBlue = row.uva_usdb;
+            lastUSDBlueDate = row.fecha;
+        }
+        
+        if (!lastUSDOficial && row.uva_usd) {
+            lastUSDOficial = row.uva_usd;
+            lastUSDOficialDate = row.fecha;
+        }
+        
+        if (!lastUSDBValue && row.usdb) {
+            lastUSDBValue = row.usdb;
+            lastUSDBDate = row.fecha;
+        }
+        
+        if (!lastUSDValue && row.usd) {
+            lastUSDValue = row.usd;
+            lastUSDDate = row.fecha;
+        }
+        
+        // Stop if we found all values
+        if (lastUVA && lastUSDBlue && lastUSDOficial && lastUSDBValue && lastUSDValue) {
+            break;
+        }
+    }
+    
+    const stats = {
+        dateRange: df.length > 0 ? {
+            start: df[0].fecha,
+            end: df[df.length - 1].fecha
+        } : null,
+        latestUVA: lastUVA,
+        latestUVADate: lastUVADate,
+        latestUVA_USDBlue: lastUSDBlue,
+        latestUVA_USDBlueDate: lastUSDBlueDate,
+        latestUVA_USDOficial: lastUSDOficial,
+        latestUVA_USDOficialDate: lastUSDOficialDate,
+        latestUSDBValue: lastUSDBValue,
+        latestUSDBDate: lastUSDBDate,
+        latestUSDValue: lastUSDValue,
+        latestUSDDate: lastUSDDate
+    };
+    return stats;
+}
+
+function displayStats(stats) {
+    const formatDate = (dateStr) => {
+        if (!dateStr) return '';
+        return dateStr; // Already in YYYY-MM-DD format
+    };
+    
+    const statsHtml = `
+        <div class="stat-card">
+            <div class="stat-label">Rango de Fechas</div>
+            <div class="stat-value" style="font-size: 1.2em;">
+                ${stats.dateRange ? stats.dateRange.start + '<br>' + stats.dateRange.end : 'N/A'}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Último Valor UVA</div>
+            <div class="stat-value">${stats.latestUVA ? stats.latestUVA.toFixed(2) : 'N/A'}</div>
+            ${stats.latestUVADate ? `<div class="stat-subinfo">AL: ${formatDate(stats.latestUVADate)}</div>` : ''}
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">UVA en USD Blue</div>
+            <div class="stat-value">${stats.latestUVA_USDBlue ? stats.latestUVA_USDBlue.toFixed(2) : 'N/A'}</div>
+            ${stats.latestUVA_USDBlueDate ? `<div class="stat-subinfo">AL: ${formatDate(stats.latestUVA_USDBlueDate)}</div>` : ''}
+            ${stats.latestUSDBValue && stats.latestUSDBDate ? `<div class="stat-subinfo">USD Blue: ${stats.latestUSDBValue.toFixed(2)}</div>` : ''}
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">UVA en USD Oficial</div>
+            <div class="stat-value">${stats.latestUVA_USDOficial ? stats.latestUVA_USDOficial.toFixed(2) : 'N/A'}</div>
+            ${stats.latestUVA_USDOficialDate ? `<div class="stat-subinfo">AL: ${formatDate(stats.latestUVA_USDOficialDate)}</div>` : ''}
+            ${stats.latestUSDValue && stats.latestUSDDate ? `<div class="stat-subinfo">USD Oficial: ${stats.latestUSDValue.toFixed(2)}</div>` : ''}
+        </div>
+    `;
+    const statsEl = document.getElementById('stats');
+    if (statsEl) statsEl.innerHTML = statsHtml;
+}
+
+function createChart1(df) {
+    const dates = df.map(row => row.fecha);
+    const traces = [
+        {
+            x: dates,
+            y: df.map(row => row.uva_usdb),
+            name: 'UVA Blue',
+            type: 'scatter',
+            mode: 'lines',
+            line: { color: '#63b3ed', width: 2 }
+        },
+        {
+            x: dates,
+            y: df.map(row => row.uva_usd),
+            name: 'UVA Oficial',
+            type: 'scatter',
+            mode: 'lines',
+            line: { color: '#68d391', width: 2 }
+        }
+    ];
+
+    const layout = {
+        title: 'UVA medido en USD (Blue vs Oficial)',
+        xaxis: { title: 'Fecha' },
+        yaxis: { title: 'Valor en USD' },
+        legend: {
+            orientation: 'h',
+            y: -0.2,
+            x: 0.5,
+            xanchor: 'center'
+        }
+    };
+
+    createChart('chart1', traces, layout);
+}
+
+// Load data when page loads
+window.addEventListener('DOMContentLoaded', loadData);
