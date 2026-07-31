@@ -27,9 +27,6 @@ wheels/
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb_checkpoints/
-*.html
-!README.html  # Allow README.html if you want to publish it
-!docs/*.html  # Allow HTML files in docs/ for GitHub Pages
 
 # Environment variables
 .env
