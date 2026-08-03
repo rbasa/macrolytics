@@ -1,10 +1,16 @@
+const navbarScriptUrl = document.currentScript.src;
+
 document.addEventListener('DOMContentLoaded', () => {
+  const siteRoot = new URL('../', navbarScriptUrl);
 
   const links = [
-    { label: 'Inicio', href: '/index.html' },
-    { label: 'Precios', href: '/inflacion/inflacion.html' },
-    { label: 'Actividad Económica', href: '/actividad_economica/actividad_economica.html' },
-    { label: 'Análisis UVA', href: '/uva/uva.html' }
+    { label: 'Inicio', path: 'index.html' },
+    { label: 'Precios', path: 'inflacion/inflacion.html' },
+    {
+      label: 'Actividad Económica',
+      path: 'actividad_economica/actividad_economica.html'
+    },
+    { label: 'Análisis UVA', path: 'uva/uva.html' }
   ];
 
   const nav = document.createElement('nav');
@@ -12,33 +18,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const brand = document.createElement('a');
   brand.className = 'brand';
-  brand.href = '/index.html';
-  brand.innerHTML = '📈 Macro';
+  brand.href = new URL('index.html', siteRoot).href;
+  brand.innerHTML = '📈 Macrolytics';
+
   nav.appendChild(brand);
 
   const navLinks = document.createElement('div');
   navLinks.className = 'nav-links';
 
-  links.map((l) => {
-    const a = document.createElement('a');
-    a.className = 'nav-link';
-    a.textContent = l.label;
-    a.href = l.href;
-    if (l.disabled) {
-      a.style.opacity = '0.6';
-      a.style.pointerEvents = 'none';
-    }
-    navLinks.appendChild(a);
+  links.forEach(({ label, path }) => {
+    const anchor = document.createElement('a');
+
+    anchor.className = 'nav-link';
+    anchor.textContent = label;
+    anchor.href = new URL(path, siteRoot).href;
+
+    navLinks.appendChild(anchor);
   });
 
   nav.appendChild(navLinks);
 
-  // Insert the navbar before the first .container element if present,
-  // otherwise prepend to body
   const container = document.querySelector('.container');
-  if (container && container.parentNode) {
+
+  if (container?.parentNode) {
     container.parentNode.insertBefore(nav, container);
   } else {
-    document.body.insertBefore(nav, document.body.firstChild);
+    document.body.prepend(nav);
   }
 });
