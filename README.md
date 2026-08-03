@@ -7,7 +7,7 @@ Analysis of the **UVA (Unidad de Valor Adquisitivo)** index measured in differen
 1. **📊 Analysis Notebook**: Study UVA volatility when measured in USD
 2. **📥 Data Pipeline**: Automated ETL to fetch and version financial data
 3. **🗄️ DoltHub Integration**: Public dataset available at [dolthub.com/rbasa/macroeconomia](https://www.dolthub.com/repositories/rbasa/macroeconomia)
-4. **🌐 Live Analysis**: Daily-updated HTML analysis published on [GitHub Pages](https://rbasa.github.io/uva/) (after setup)
+4. **🌐 Live Analysis**: Daily-updated HTML analysis published on [GitHub Pages](https://rbasa.github.io/macrolytics/)
 
 ## 📈 Data Coverage
 
@@ -34,7 +34,7 @@ Analysis of the **UVA (Unidad de Valor Adquisitivo)** index measured in differen
 
 ## 🚀 Quick Start
 
-### For Analysis (Most Users)
+### For Analysis
 
 Just open the notebook - data loads from DoltHub automatically:
 
