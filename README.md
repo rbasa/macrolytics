@@ -57,7 +57,7 @@ Keep this terminal open with the server running.
 In a new terminal:
 
 ```bash
-cd /Users/user/uva
+cd /Users/user/macrolytics
 source .venv/bin/activate
 
 # Configure database connection (or script will use default)
@@ -70,13 +70,11 @@ python etl/populate_usd_uva.py
 ## 📁 Project Structure
 
 ```
-uva/
+macrolytics/
 ├── data/                    # Dolt database directory
 │   └── tables.sql          # Table schemas
 ├── etl/                    # ETL scripts
 │   ├── populate_usd_uva.py # Main ETL script
-│   ├── fix_schema.py       # Schema fix utilities
-│   ├── fix_primary_key.py  # Primary key fix utilities
 │   └── utils/              # Shared utilities
 │       ├── __init__.py
 │       ├── utils.py        # Common functions
@@ -128,20 +126,6 @@ data = db.query("SELECT * FROM fx_rate WHERE kind='UVA' ORDER BY DATE DESC LIMIT
 db.insert_fx_rate(date='2024-08-26', kind='UVA', pair='UVA_ARS', rate=1565.43)
 
 db.disconnect()
-```
-
-## 🔧 Maintenance
-
-### Fix Schema
-
-```bash
-python etl/fix_schema.py
-```
-
-### Fix Primary Key
-
-```bash
-python etl/fix_primary_key.py
 ```
 
 ## 📈 Data Summary
