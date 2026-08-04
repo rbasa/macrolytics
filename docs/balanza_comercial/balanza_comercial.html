@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Balanza Comercial - Macroanálisis</title>
+  <link rel="stylesheet" href="../styles/main.css">
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body class="balanza-comercial">
+  <div class="container">
+    <header>
+      <h1>💱 Balanza Comercial</h1>
+      <p class="subtitle">Exportaciones, Importaciones y Balance comercial</p>
+      <p class="last-updated" id="lastUpdated">Cargando datos...</p>
+    </header>
+
+    <div id="loading" class="loading">
+      <div class="loading-spinner"></div>
+      <p>Cargando datos de balanza comercial...</p>
+    </div>
+
+    <div id="error" class="error" style="display:none;"></div>
+
+    <div id="content" style="display:none;">
+      <div class="stats" id="stats"></div>
+
+      <div class="chart-container">
+        <h2 class="chart-title">Exportaciones e Importaciones</h2>
+        <div id="chart_series" class="chart"></div>
+      </div>
+
+      <div class="chart-container">
+        <h2 class="chart-title">Balanza Comercial por periodo</h2>
+        <div id="chart_balance" class="chart"></div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem;">
+        <div class="chart-container">
+          <h2 class="chart-title" id="title_expo_yoy">Exportaciones - Variación interanual</h2>
+          <div id="chart_expo_yoy" class="chart"></div>
+        </div>
+
+        <div class="chart-container">
+          <h2 class="chart-title" id="title_impo_yoy">Importaciones - Variación interanual</h2>
+          <div id="chart_impo_yoy" class="chart"></div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <p>
+        Datos provenientes de la tabla 
+        <a href="https://www.dolthub.com/repositories/rbasa/macroeconomia/query/main?active=Tables&q=SELECT+*%0AFROM+%60trade_argentina%60%0AORDER+BY+%60period%60+ASC%0ALIMIT+1000%3B%0A" target="external">
+          <code>trade_argentina</code>
+        </a> (DoltHub)
+      </p>
+      <p><a href="../index.html">Volver al índice</a></p>
+    </footer>
+  </div>
+
+  <script src="../js/navbar.js" defer></script>
+  <script src="js/balanza.js" defer></script>
+</body>
+</html>

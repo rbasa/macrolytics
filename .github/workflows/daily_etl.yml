@@ -205,6 +205,8 @@ jobs:
           python etl/populate_ipc_arg.py
           echo "Running Argentina EMAE ETL..."
           python etl/populate_emae_arg.py
+          echo "Running Argentina Trade ETL..."
+          python etl/populate_trade_arg.py
           
           echo "Pushing commits to DoltHub..."
           cd macroeconomia
