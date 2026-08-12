@@ -1,32 +1,64 @@
-name: Publish to GitHub Pages
+name: Publish React Frontend to GitHub Pages
 
 on:
-  # Allow manual trigger
-  workflow_dispatch:
-  
-  # Run on push to main branch (when docs/index.html changes)
   push:
     branches:
       - main
     paths:
-      - 'docs/**'
+      - 'frontend/**'
       - '.github/workflows/publish_pages.yml'
 
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+      - name: Setup Node
+        uses: actions/setup-node@v6
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs
-          cname: false
-          commit_message: "🚀 Deploy index.html to GitHub Pages - ${{ github.sha }}"
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build React frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: frontend/dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
