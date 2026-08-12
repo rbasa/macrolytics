@@ -40,7 +40,7 @@ uva/
 
 ## 🚀 Quick Start
 
-### 1. Install Dependencies
+### 1.1 Install Dependencies
 
 ```bash
 # Create virtual environment
@@ -50,6 +50,22 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 ```
+
+### 1.2 Run Front End
+
+# Change to frontend directory
+```bash
+cd frontend
+
+# Install frontend dependencies
+npm install
+
+# Start development server
+npm run dev
+
+```
+This should start the app at http://localhost:5173/.
+
 
 ### 2. Option A: Use DoltHub Data (Easiest)
 
