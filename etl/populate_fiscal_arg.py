@@ -1,32 +1,49 @@
 #!/usr/bin/env python3
 """
-Populate Argentina fiscal accounts from Datos Argentina.
+Populate Argentina fiscal accounts.
 
-Sources:
-  - Sector Público Nacional - Base Caja:
-    accounting aggregates and fiscal balances.
-  - IMIG:
-    detailed tax revenue components.
+Sources
+-------
+1. Oficina Nacional de Presupuesto (ONP)
+   Cuenta Ahorro - Inversión - Financiamiento del
+   Sector Público Nacional, Base Caja, mensual.
 
-All values are millions of current Argentine pesos.
+   The official monthly Excel workbook is used directly so that
+   every accounting line stored in fiscal_argentina corresponds
+   to the published AIF table. No accounting identities are
+   inferred by this ETL.
 
-Initial historical load:
-  LAST_PERIODS = 1000
+2. Datos Argentina / IMIG
+   Detailed tax revenue components, using fixed official series IDs.
 
-Normal daily update:
-  LAST_PERIODS = 6
+Units
+-----
+Millions of current Argentine pesos.
+
+First historical load:
+    LAST_PERIODS = 1000
+
+Normal update:
+    LAST_PERIODS = 6
 
 Usage:
-  python etl/populate_fiscal_arg.py
+    python etl/populate_fiscal_arg.py
 """
 
 import logging
 import os
+import re
+import ssl
 import sys
-from datetime import datetime
+import unicodedata
+from datetime import date, datetime
+from html.parser import HTMLParser
+from io import BytesIO
+from urllib.parse import urljoin, urlparse
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -35,563 +52,1273 @@ from utils.db_manager import DoltDBManager
 
 LOGGER = logging.getLogger(__name__)
 
-SEARCH_URL = (
-  "https://apis.datos.gob.ar/series/api/search/"
-)
-
-SERIES_URL = (
-  "https://apis.datos.gob.ar/series/api/series"
-)
-
 TABLE_NAME = "fiscal_argentina"
 
-# First run: 1000
+# First historical run: 1000
 # Normal runs: 6
 LAST_PERIODS = 6
 
-MAX_SERIES_PER_REQUEST = 30
+AIF_START_YEAR = 2017
 
-
-AIF_DATASET = (
-  "Esquema Ahorro - Inversión - Financiamiento. "
-  "Sector Público Nacional. Base Caja."
+ONP_PAGE_URL = (
+    "https://www.economia.gob.ar/onp/ejecucion/{year}"
 )
 
-IMIG_DATASET = (
-  "Informe Mensual de Ingresos y Gastos del "
-  "Sector Público Nacional No Financiero (IMIG)"
+SERIES_URL = (
+    "https://apis.datos.gob.ar/series/api/series"
 )
+
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(compatible; Macrolytics/1.0)"
+    ),
+}
+
+ONP_CA_CERT_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "certs",
+    "sectigo_public_server_authentication_ca_dv_r36.crt",
+)
+
+
+class ONPTLSAdapter(HTTPAdapter):
+    """
+    Complete the certificate chain currently omitted by the ONP server.
+
+    The adapter remains fully verified and is mounted only for ONP URLs.
+    Other HTTP clients and the Datos Argentina API keep their default TLS
+    configuration.
+    """
+
+    def __init__(self, ca_cert_path, *args, **kwargs):
+        self.ca_cert_path = ca_cert_path
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(
+        self,
+        connections,
+        maxsize,
+        block=False,
+        **pool_kwargs,
+    ):
+        context = ssl.create_default_context()
+        context.load_verify_locations(
+            cafile=self.ca_cert_path,
+        )
+        pool_kwargs["ssl_context"] = context
+
+        super().init_poolmanager(
+            connections,
+            maxsize,
+            block=block,
+            **pool_kwargs,
+        )
+
+
+def create_onp_session():
+    """Create a verified HTTP session for the ONP website."""
+    session = requests.Session()
+    session.headers.update(
+        REQUEST_HEADERS
+    )
+    session.mount(
+        "https://www.economia.gob.ar/",
+        ONPTLSAdapter(ONP_CA_CERT_PATH),
+    )
+    return session
+
+
+ONP_SESSION = create_onp_session()
 
 
 # ------------------------------------------------------------------
-# Canonical database column -> official series description search
+# Tax breakdown
+# Exact official IMIG series IDs.
 # ------------------------------------------------------------------
 
-AIF_SERIES = {
-  # Ingresos corrientes
-  "ingresos_corrientes_total":
-    "Total ingresos corrientes Metodología 2017",
+TAX_SERIES = {
+    "ingresos_tributarios_iva":
+        "452.2_IVA_NETO_RROS_0_T_19_67",
 
-  "ingresos_tributarios_total":
-    "Ingresos corrientes ingresos tributarios Metodología 2017",
+    "ingresos_tributarios_ganancias":
+        "452.2_GANANCIASIAS_0_T_9_51",
 
-  "ingresos_aportes_contribuciones_seguridad_social":
-    "Ingresos corrientes aportes y contrib. a la seg. social Metodología 2017",
+    "ingresos_tributarios_debitos_creditos":
+        "452.2_DEBITOS_CRTOS_0_T_16_22",
 
-  "ingresos_no_tributarios":
-    "Ingresos corrientes ingresos no tributarios Metodología 2017",
+    "ingresos_tributarios_bienes_personales":
+        "452.2_BIENES_PERLES_0_T_17_26",
 
-  "ingresos_ventas_bienes_servicios_adm_publica":
-    "Ingresos corrientes ventas de bs. y serv. de las adm. pub. Metodología 2017",
+    "ingresos_tributarios_combustibles":
+        "452.2_COMBUSTIBLLES_0_T_12_97",
 
-  "ingresos_operacion":
-    "Ingresos corrientes ingresos de operacion Metodología 2017",
+    "ingresos_tributarios_derechos_exportacion":
+        "452.2_DERECHOS_EION_0_T_20_42",
 
-  "ingresos_rentas_propiedad_netas":
-    "Ingresos corrientes rentas de la propiedad netas Metodología 2017",
+    "ingresos_tributarios_derechos_importacion":
+        "452.2_DERECHOS_IION_0_T_20_60",
 
-  "ingresos_transferencias_corrientes":
-    "Ingresos corrientes transferencias corrientes Metodología 2017",
+    "ingresos_tributarios_impuestos_internos":
+        "452.2_IMPUESTOS_NOS_0_T_18_87",
 
-  "ingresos_otros":
-    "Ingresos corrientes otros ingresos Metodología 2017",
-
-  "ingresos_superavit_operativo_empresas_publicas":
-    "Ingresos corrientes superavit operativo empresas pub. Metodología 2017",
-
-  # Gastos corrientes
-  "gastos_corrientes_total":
-    "Total gastos corrientes Metodología 2017",
-
-  "gastos_consumo_operacion_total":
-    "Gastos corrientes gastos de consumo y operacion total Metodología 2017",
-
-  "gastos_consumo_operacion_remuneraciones":
-    "Gastos corrientes gastos de consumo y operacion remuneraciones Metodología 2017",
-
-  "gastos_consumo_operacion_bienes_servicios":
-    "Gastos corrientes gastos de consumo y operacion bienes y servicios Metodología 2017",
-
-  "gastos_consumo_operacion_otros":
-    "Gastos corrientes gastos de consumo y operacion otros gastos Metodología 2017",
-
-  "gastos_intereses_otras_rentas_total":
-    "Gastos corrientes intereses y otras rentas de la prop. total Metodología 2017",
-
-  "gastos_intereses_netos":
-    "Gastos corrientes intereses y otras rentas de la prop. intereses netos Metodología 2017",
-
-  "gastos_otras_rentas":
-    "Gastos corrientes intereses y otras rentas de la prop. otras rentas Metodología 2017",
-
-  "gastos_prestaciones_seguridad_social":
-    "Gastos corrientes prestaciones de la seguridad social Metodología 2017",
-
-  "gastos_otros_corrientes":
-    "Gastos corrientes otros gastos corrientes Metodología 2017",
-
-  "gastos_transferencias_corrientes_total":
-    "Gastos corrientes transferencias corrientes total Metodología 2017",
-
-  "gastos_transferencias_sector_privado":
-    "Gastos corrientes transferencias corrientes al sector privado total sector privado Metodología 2017",
-
-  "gastos_transferencias_sector_publico_total":
-    "Gastos corrientes transferencias corrientes al sector público total Metodología 2017",
-
-  "gastos_transferencias_provincias_caba":
-    "Gastos corrientes transferencias corrientes al sector público provincias y caba total Metodología 2017",
-
-  "gastos_transferencias_universidades":
-    "Gastos corrientes transferencias corrientes al sector público universidades Metodología 2017",
-
-  "gastos_transferencias_sector_publico_otras":
-    "Gastos corrientes transferencias corrientes al sector público otras Metodología 2017",
-
-  "gastos_transferencias_sector_externo":
-    "Gastos corrientes transferencias corrientes al sector externo Metodología 2017",
-
-  "gastos_otros":
-    "Gastos corrientes otros gastos Metodología 2017",
-
-  "gastos_deficit_operativo_empresas_publicas":
-    "Gastos corrientes deficit operativo empresas pub. Metodología 2017",
-
-  # Resultado económico
-  "resultado_economico":
-    "Resultado economico ahorro desahorro Metodología 2017",
-
-  # Capital
-  "recursos_capital":
-    "Recursos de capital total recursos de capital Metodología 2017",
-
-  "gastos_capital_total":
-    "Total gastos de capital Metodología 2017",
-
-  "gastos_capital_inversion_real_directa":
-    "Gastos de capital inversion real directa Metodología 2017",
-
-  "gastos_capital_transferencias_total":
-    "Gastos de capital transferencias de capital total Metodología 2017",
-
-  "gastos_capital_transferencias_provincias_caba":
-    "Gastos de capital transferencias de capital a provincias y caba total Metodología 2017",
-
-  "gastos_capital_transferencias_otras":
-    "Gastos de capital transferencias de capital otras Metodología 2017",
-
-  "gastos_capital_inversion_financiera_total":
-    "Gastos de capital inversion financiera total Metodología 2017",
-
-  "gastos_capital_inversion_financiera_provincias_caba":
-    "Gastos de capital inversion financiera a provincias y caba Metodología 2017",
-
-  "gastos_capital_inversion_financiera_resto":
-    "Gastos de capital inversion financiera resto Metodología 2017",
-
-  # Antes de figurativos
-  "ingresos_antes_figurativos":
-    "Ingresos antes de figurativos Metodología 2017",
-
-  "gastos_antes_figurativos":
-    "Gastos antes de figurativos Metodología 2017",
-
-  "resultado_financiero_antes_figurativos":
-    "Resultado financiero antes de figurativos Metodología 2017",
-
-  # Figurativos
-  "contribuciones_figurativas_total":
-    "Contribuciones figurativas total Metodología 2017",
-
-  "contribuciones_figurativas_tesoro_nacional":
-    "Contribuciones figurativas del Tesoro Nacional Metodología 2017",
-
-  "contribuciones_figurativas_recursos_afectados":
-    "Contribuciones figurativas de Recursos Afectados Metodología 2017",
-
-  "contribuciones_figurativas_organismos_descentralizados":
-    "Contribuciones figurativas de Organismos Descentralizados Metodología 2017",
-
-  "contribuciones_figurativas_seguridad_social":
-    "Contribuciones figurativas de Instituciones de Seguridad Social Metodología 2017",
-
-  "contribuciones_figurativas_pami_fondos_otros":
-    "Contribuciones figurativas PAMI Fondos Fiduciarios y Otros Metodología 2017",
-
-  "gastos_figurativos":
-    "Gastos figurativos Metodología 2017",
-
-  # Después de figurativos
-  "ingresos_despues_figurativos":
-    "Ingresos despues de figurativos Metodología 2017",
-
-  "gastos_primarios_despues_figurativos":
-    "Gastos primarios despues de figurativos Metodología 2017",
-
-  "gastos_despues_figurativos":
-    "Gastos despues de figurativos Metodología 2017",
-
-  "resultado_primario":
-    "Resultado primario Metodología 2017",
-
-  "resultado_financiero":
-    "Resultado financiero Metodología 2017",
-
-  # Memo items
-  "rentas_percibidas_bcra":
-    "Rentas percibidas del BCRA Metodología 2017",
-
-  "rentas_publicas_fgs_otros":
-    "Rentas públicas percibidas por el FGS y otros Metodología 2017",
-
-  "intereses_pagados_intrasector_publico":
-    "Intereses pagados intra-sector público Metodología 2017",
+    "ingresos_tributarios_resto":
+        "452.2_RESTO_TRIBIOS_0_T_17_0",
 }
 
 
-IMIG_SERIES = {
-  "ingresos_tributarios_iva":
-    "IMIG Ingresos totales Ingresos tributarios IVA neto de reintegros",
+# ------------------------------------------------------------------
+# AIF rows
+#
+# IMPORTANT:
+# Order matters.
+#
+# We walk the official Excel from top to bottom. This lets us
+# distinguish repeated labels such as:
+#   - Transferencias corrientes
+#   - Otros gastos
+#   - A Provincias y CABA
+#
+# No accounting totals are calculated here: every value is taken
+# directly from the final TOTAL column of the official sheet.
+# ------------------------------------------------------------------
 
-  "ingresos_tributarios_ganancias":
-    "IMIG Ingresos totales Ingresos tributarios Ganancias",
+AIF_ROWS = [
+    # I) Ingresos corrientes
+    (
+        "ingresos_corrientes_total",
+        ("INGRESOS CORRIENTES",),
+    ),
+    (
+        "ingresos_tributarios_total",
+        ("INGRESOS IMPOSITIVOS",),
+    ),
+    (
+        "ingresos_aportes_contribuciones_seguridad_social",
+        (
+            "APORTES Y CONTRIB. A LA SEG. SOCIAL",
+            "APORTES Y CONTRIB A LA SEG SOCIAL",
+        ),
+    ),
+    (
+        "ingresos_no_tributarios",
+        ("INGRESOS NO IMPOSITIVOS",),
+    ),
+    (
+        "ingresos_ventas_bienes_servicios_adm_publica",
+        (
+            "VENTAS DE BS.Y SERV.DE LAS ADM.PUB.",
+            "VENTAS DE BS Y SERV DE LAS ADM PUB",
+        ),
+    ),
+    (
+        "ingresos_operacion",
+        ("INGRESOS DE OPERACION",),
+    ),
+    (
+        "ingresos_rentas_propiedad_netas",
+        ("RENTAS DE LA PROPIEDAD NETAS",),
+    ),
+    (
+        "ingresos_transferencias_corrientes",
+        ("TRANSFERENCIAS CORRIENTES",),
+    ),
+    (
+        "ingresos_otros",
+        ("OTROS INGRESOS",),
+    ),
+    (
+        "ingresos_superavit_operativo_empresas_publicas",
+        (
+            "SUPERAVIT OPERATIVO EMPRESAS PUB.",
+            "SUPERAVIT OPERATIVO EMPRESAS PUB",
+        ),
+    ),
 
-  "ingresos_tributarios_debitos_creditos":
-    "IMIG Ingresos totales Ingresos tributarios Débitos y créditos",
+    # II) Gastos corrientes
+    (
+        "gastos_corrientes_total",
+        ("GASTOS CORRIENTES",),
+    ),
+    (
+        "gastos_consumo_operacion_total",
+        ("GASTOS DE CONSUMO Y OPERACION",),
+    ),
+    (
+        "gastos_consumo_operacion_remuneraciones",
+        ("REMUNERACIONES",),
+    ),
+    (
+        "gastos_consumo_operacion_bienes_servicios",
+        ("BIENES Y SERVICIOS",),
+    ),
+    (
+        "gastos_consumo_operacion_otros",
+        ("OTROS GASTOS",),
+    ),
+    (
+        "gastos_intereses_otras_rentas_total",
+        (
+            "INTERESES Y OTRAS RENTAS DE LA PROP.",
+            "INTERESES Y OTRAS RENTAS DE LA PROP",
+        ),
+    ),
+    (
+        "gastos_intereses_netos",
+        ("INTERESES NETOS",),
+    ),
+    (
+        "gastos_otras_rentas",
+        ("OTRAS RENTAS",),
+    ),
+    (
+        "gastos_prestaciones_seguridad_social",
+        ("PRESTACIONES DE LA SEGURIDAD SOCIAL",),
+    ),
+    (
+        "gastos_otros_corrientes",
+        ("OTROS GASTOS CORRIENTES",),
+    ),
+    (
+        "gastos_transferencias_corrientes_total",
+        ("TRANSFERENCIAS CORRIENTES",),
+    ),
+    (
+        "gastos_transferencias_sector_privado",
+        ("AL SECTOR PRIVADO",),
+    ),
+    (
+        "gastos_transferencias_sector_publico_total",
+        ("AL SECTOR PUBLICO",),
+    ),
+    (
+        "gastos_transferencias_provincias_caba",
+        (
+            "PROVINCIAS Y CABA",
+            "PROVINCIAS Y C.A.B.A.",
+        ),
+    ),
+    (
+        "gastos_transferencias_universidades",
+        ("UNIVERSIDADES",),
+    ),
+    (
+        "gastos_transferencias_sector_publico_otras",
+        ("OTRAS",),
+    ),
+    (
+        "gastos_transferencias_sector_externo",
+        ("AL SECTOR EXTERNO",),
+    ),
+    (
+        "gastos_otros",
+        ("OTROS GASTOS",),
+    ),
+    (
+        "gastos_deficit_operativo_empresas_publicas",
+        (
+            "DEFICIT OPERATIVO EMPRESAS PUB.",
+            "DEFICIT OPERATIVO EMPRESAS PUB",
+        ),
+    ),
 
-  "ingresos_tributarios_bienes_personales":
-    "IMIG Ingresos totales Ingresos tributarios Bienes personales",
+    # III) Resultado económico
+    (
+        "resultado_economico",
+        (
+            "RESULT.ECON.: AHORRO/DESAHORRO",
+            "RESULT ECON AHORRO DESAHORRO",
+        ),
+    ),
 
-  "ingresos_tributarios_combustibles":
-    "IMIG Ingresos totales Ingresos tributarios Combustibles",
+    # IV) Recursos de capital
+    (
+        "recursos_capital",
+        ("RECURSOS DE CAPITAL",),
+    ),
 
-  "ingresos_tributarios_derechos_exportacion":
-    "IMIG Ingresos totales Ingresos tributarios Derechos de exportación",
+    # V) Gastos de capital
+    (
+        "gastos_capital_total",
+        ("GASTOS DE CAPITAL",),
+    ),
+    (
+        "gastos_capital_inversion_real_directa",
+        ("INVERSION REAL DIRECTA",),
+    ),
+    (
+        "gastos_capital_transferencias_total",
+        ("TRANSFERENCIAS DE CAPITAL",),
+    ),
+    (
+        "gastos_capital_transferencias_provincias_caba",
+        (
+            "A PROVINCIAS Y CABA",
+            "A PROVINCIAS Y C.A.B.A.",
+        ),
+    ),
+    (
+        "gastos_capital_transferencias_otras",
+        ("OTRAS",),
+    ),
+    (
+        "gastos_capital_inversion_financiera_total",
+        ("INVERSION FINANCIERA",),
+    ),
+    (
+        "gastos_capital_inversion_financiera_provincias_caba",
+        (
+            "A PROVINCIAS Y CABA",
+            "A PROVINCIAS Y C.A.B.A.",
+        ),
+    ),
+    (
+        "gastos_capital_inversion_financiera_resto",
+        ("RESTO",),
+    ),
 
-  "ingresos_tributarios_derechos_importacion":
-    "IMIG Ingresos totales Ingresos tributarios Derechos de importación",
+    # VI-VIII
+    (
+        "ingresos_antes_figurativos",
+        ("INGRESOS ANTES DE FIGURAT",),
+    ),
+    (
+        "gastos_antes_figurativos",
+        ("GASTOS ANTES DE FIGURAT",),
+    ),
+    (
+        "resultado_financiero_antes_figurativos",
+        ("RESULT.FINANC.ANTES DE FIGURAT",),
+    ),
 
-  "ingresos_tributarios_impuestos_internos":
-    "IMIG Ingresos totales Ingresos tributarios Impuestos internos",
+    # IX-X
+    (
+        "contribuciones_figurativas_total",
+        ("CONTRIBUCIONES FIGURATIVAS",),
+    ),
+    (
+        "contribuciones_figurativas_tesoro_nacional",
+        ("DEL TESORO NACIONAL",),
+    ),
+    (
+        "contribuciones_figurativas_recursos_afectados",
+        ("DE RECURSOS AFECTADOS",),
+    ),
+    (
+        "contribuciones_figurativas_organismos_descentralizados",
+        ("DE ORGANISMOS DESCENTRALIZADOS",),
+    ),
+    (
+        "contribuciones_figurativas_seguridad_social",
+        (
+            "DE INSTITUCIONES DE SEGURIDAD SOCIAL",
+            "DE INSTITUCIONES DE LA SEGURIDAD SOCIAL",
+        ),
+    ),
+    (
+        "contribuciones_figurativas_pami_fondos_otros",
+        (
+            "DE PAMI, FDOS. FIDUCIARIOS Y OTROS",
+            "DE PAMI FDOS FIDUCIARIOS Y OTROS",
+        ),
+    ),
+    (
+        "gastos_figurativos",
+        ("GASTOS FIGURATIVOS",),
+    ),
 
-  "ingresos_tributarios_resto":
-    "IMIG Ingresos totales Ingresos tributarios Resto de ingresos tributarios",
+    # XI-XV
+    (
+        "ingresos_despues_figurativos",
+        ("INGRESOS DESPUES DE FIGURAT",),
+    ),
+    (
+        "gastos_primarios_despues_figurativos",
+        ("GASTOS PRIMARIOS DESPUES DE FIGURAT",),
+    ),
+    (
+        "gastos_despues_figurativos",
+        ("GASTOS DESPUES DE FIGURAT",),
+    ),
+    (
+        "resultado_primario",
+        ("RESULTADO PRIMARIO",),
+    ),
+    (
+        "resultado_financiero",
+        ("RESULTADO FINANCIERO",),
+    ),
+
+    # Memo items
+    (
+        "rentas_percibidas_bcra",
+        ("RENTAS PERCIBIDAS DEL BCRA",),
+    ),
+    (
+        "rentas_publicas_fgs_otros",
+        (
+            "RENTAS PUBL. PERCIBIDAS POR EL FGS Y OTROS",
+            "RENTAS PUBLICAS PERCIBIDAS POR EL FGS Y OTROS",
+        ),
+    ),
+    (
+        "intereses_pagados_intrasector_publico",
+        (
+            "INTERESES PAGADOS INTRA-SECTOR PUBLICO",
+            "INTERESES PAGADOS INTRA SECTOR PUBLICO",
+        ),
+    ),
+]
+
+
+AIF_COLUMNS = [
+    column
+    for column, _ in AIF_ROWS
+]
+
+VALUE_COLUMNS = [
+    *AIF_COLUMNS,
+    *TAX_SERIES.keys(),
+]
+
+
+MONTHS = {
+    "ENERO": 1,
+    "FEBRERO": 2,
+    "MARZO": 3,
+    "ABRIL": 4,
+    "MAYO": 5,
+    "JUNIO": 6,
+    "JULIO": 7,
+    "AGOSTO": 8,
+    "SEPTIEMBRE": 9,
+    "SETIEMBRE": 9,
+    "OCTUBRE": 10,
+    "NOVIEMBRE": 11,
+    "DICIEMBRE": 12,
 }
 
 
 def normalize_text(value):
-  """Normalize text for metadata matching."""
-  return (
-    str(value)
-    .lower()
-    .replace(".", " ")
-    .replace(",", " ")
-    .replace("-", " ")
-  )
+    """
+    Normalize labels from the official Excel / HTML.
+
+    This is only used to identify known row labels.
+    It is NOT used to resolve statistical series.
+    """
+    if value is None:
+        return ""
+
+    value = str(value).strip()
+
+    if not value:
+        return ""
+
+    value = unicodedata.normalize(
+        "NFKD",
+        value,
+    )
+
+    value = "".join(
+        character
+        for character in value
+        if not unicodedata.combining(character)
+    )
+
+    value = value.upper()
+
+    # Remove leading Roman-number section markers:
+    # I), II), III), ...
+    value = re.sub(
+        r"^\s*[IVXLCDM]+\)\s*",
+        "",
+        value,
+    )
+
+    # Remove numeric footnotes:
+    # (1), (2), (3), ...
+    value = re.sub(
+        r"\(\s*\d+\s*\)",
+        " ",
+        value,
+    )
+
+    value = re.sub(
+        r"[^A-Z0-9]+",
+        " ",
+        value,
+    )
+
+    return re.sub(
+        r"\s+",
+        " ",
+        value,
+    ).strip()
 
 
-def search_series(query):
-  """Search Datos Argentina metadata."""
-  response = requests.get(
-    SEARCH_URL,
-    params={
-      "q": query,
-      "limit": 100,
-    },
-    timeout=60,
-  )
-  response.raise_for_status()
-
-  return response.json().get("data", [])
-
-
-def resolve_series_id(
-  query,
-  dataset_title,
+def row_matches(
+    actual,
+    aliases,
 ):
-  """
-  Resolve one monthly official series from metadata.
+    """
+    Match an Excel label against an explicit set of known aliases.
 
-  Fails instead of guessing if no valid series can be found.
-  """
-  results = search_series(query)
+    Prefix matching is allowed because several published rows include
+    accounting references after the label, e.g.:
+        RESULTADO PRIMARIO (XI-XII)
 
-  candidates = []
+    The ordered AIF_ROWS definition prevents repeated labels from
+    being confused with one another.
+    """
+    actual = normalize_text(actual)
 
-  for result in results:
-    field = result.get("field", {})
-    dataset = result.get("dataset", {})
+    for alias in aliases:
+        expected = normalize_text(alias)
 
-    if (
-      dataset.get("title") != dataset_title
-      or field.get("frequency") != "R/P1M"
+        if actual == expected:
+            return True
+
+        if actual.startswith(
+            expected + " "
+        ):
+            return True
+
+    return False
+
+
+def parse_amount(value):
+    """
+    Convert one published Excel amount to float.
+
+    Excel numeric cells normally arrive already as int/float.
+    String handling is included for older workbook formats.
+    """
+    if pd.isna(value):
+        return None
+
+    if isinstance(
+        value,
+        (int, float),
     ):
-      continue
+        return float(value)
 
-    description = normalize_text(
-      field.get("description", "")
+    text = str(value).strip()
+
+    if text in {
+        "",
+        "-",
+        "–",
+        "—",
+    }:
+        return 0.0
+
+    text = text.replace(
+        "\xa0",
+        "",
+    ).replace(
+        " ",
+        "",
     )
 
-    # AIF current methodology
-    if dataset_title == AIF_DATASET:
-      if "2017" not in description:
-        continue
+    # Format such as:
+    # 5,247,480.8
+    if (
+        "," in text
+        and "." in text
+        and text.rfind(".") > text.rfind(",")
+    ):
+        text = text.replace(
+            ",",
+            "",
+        )
 
-    candidates.append(field)
+    # Format such as:
+    # 5.247.480,8
+    elif (
+        "," in text
+        and "." in text
+        and text.rfind(",") > text.rfind(".")
+    ):
+        text = text.replace(
+            ".",
+            "",
+        ).replace(
+            ",",
+            ".",
+        )
 
-  if not candidates:
+    elif "," in text:
+        parts = text.split(",")
+
+        if (
+            len(parts) == 2
+            and len(parts[1]) <= 2
+        ):
+            text = text.replace(
+                ",",
+                ".",
+            )
+        else:
+            text = text.replace(
+                ",",
+                "",
+            )
+
+    try:
+        return float(text)
+
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Could not parse fiscal amount: {value!r}"
+        ) from exc
+
+
+class AIFPageParser(HTMLParser):
+    """
+    Extract monthly Excel links from the AIF section of an ONP page.
+
+    The ONP page also contains other execution reports. We begin
+    collecting only after finding the AIF heading and stop when the
+    Divisas section begins.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+        self.in_aif = False
+        self.finished = False
+
+        self.pending_month = None
+        self.pending_excel_href = None
+
+        self.current_href = None
+        self.in_anchor = False
+
+        self.links = {}
+
+    def store_pending_link(self):
+        """Store a link once both its month and Excel URL are known."""
+        if (
+            self.pending_month is None
+            or self.pending_excel_href is None
+        ):
+            return
+
+        self.links.setdefault(
+            self.pending_month,
+            self.pending_excel_href,
+        )
+
+        self.pending_month = None
+        self.pending_excel_href = None
+
+    def handle_starttag(
+        self,
+        tag,
+        attrs,
+    ):
+        if self.finished:
+            return
+
+        if tag.lower() != "a":
+            return
+
+        self.in_anchor = True
+
+        attributes = dict(attrs)
+
+        self.current_href = attributes.get(
+            "href"
+        )
+
+    def handle_data(
+        self,
+        data,
+    ):
+        if self.finished:
+            return
+
+        text = normalize_text(data)
+
+        if not text:
+            return
+
+        if (
+            not self.in_aif
+            and "CUENTA AIF SEC PUBLICO NACIONAL"
+            in text
+        ):
+            self.in_aif = True
+            return
+
+        if not self.in_aif:
+            return
+
+        if "EJECUCION DIVISAS" in text:
+            self.finished = True
+            return
+
+        if text in MONTHS:
+            self.pending_month = MONTHS[text]
+            self.store_pending_link()
+
+    def handle_endtag(
+        self,
+        tag,
+    ):
+        if tag.lower() != "a":
+            return
+
+        if (
+            self.in_aif
+            and not self.finished
+            and self.current_href
+        ):
+            path = urlparse(
+                self.current_href
+            ).path.lower()
+
+            if path.endswith(
+                (
+                    ".xls",
+                    ".xlsx",
+                )
+            ):
+                self.pending_excel_href = (
+                    self.current_href
+                )
+                self.store_pending_link()
+
+        self.in_anchor = False
+        self.current_href = None
+
+
+def fetch_aif_links(
+    year,
+):
+    """
+    Read the ONP execution page and return the monthly AIF Excel URLs.
+    """
+    page_url = ONP_PAGE_URL.format(
+        year=year,
+    )
+
+    response = ONP_SESSION.get(
+        page_url,
+        timeout=60,
+    )
+
+    response.raise_for_status()
+
+    if not response.encoding:
+        response.encoding = (
+            response.apparent_encoding
+        )
+
+    parser = AIFPageParser()
+
+    parser.feed(
+        response.text
+    )
+
+    return [
+        {
+            "period": date(
+                year,
+                month,
+                1,
+            ),
+            "url": urljoin(
+                page_url,
+                href,
+            ),
+        }
+        for month, href
+        in parser.links.items()
+    ]
+
+
+def collect_aif_links(
+    last_periods,
+):
+    """
+    Get the latest N published monthly AIF workbooks.
+
+    With LAST_PERIODS = 1000 the full post-2017 history is scanned.
+    With LAST_PERIODS = 6 only the current and previous year pages
+    need to be inspected.
+    """
+    current_year = date.today().year
+
+    if last_periods >= 100:
+        start_year = AIF_START_YEAR
+
+    else:
+        start_year = max(
+            AIF_START_YEAR,
+            current_year - 1,
+        )
+
+    links = []
+
+    for year in range(
+        start_year,
+        current_year + 1,
+    ):
+        year_links = fetch_aif_links(
+            year,
+        )
+
+        links.extend(
+            year_links
+        )
+
+    links.sort(
+        key=lambda item:
+            item["period"]
+    )
+
+    if not links:
+        raise RuntimeError(
+            "No monthly AIF Excel files were found"
+        )
+
+    return links[-last_periods:]
+
+
+def find_sheet_layout(
+    frame,
+):
+    """
+    Locate CONCEPTO and the final TOTAL column in the workbook.
+
+    The published table contains more than one column named TOTAL.
+    The rightmost TOTAL is the total Sector Público Nacional value
+    shown in the official sheet.
+    """
+    max_rows = min(
+        25,
+        len(frame),
+    )
+
+    concept_row = None
+    concept_column = None
+
+    for row_index in range(
+        max_rows
+    ):
+        for column_index in range(
+            frame.shape[1]
+        ):
+            if normalize_text(
+                frame.iat[
+                    row_index,
+                    column_index,
+                ]
+            ) == "CONCEPTO":
+                concept_row = row_index
+                concept_column = column_index
+                break
+
+        if concept_row is not None:
+            break
+
+    if concept_row is None:
+        return None
+
+    total_columns = []
+
+    for row_index in range(
+        concept_row,
+        min(
+            concept_row + 4,
+            len(frame),
+        ),
+    ):
+        for column_index in range(
+            frame.shape[1]
+        ):
+            if normalize_text(
+                frame.iat[
+                    row_index,
+                    column_index,
+                ]
+            ) == "TOTAL":
+                total_columns.append(
+                    column_index
+                )
+
+    if not total_columns:
+        return None
+
+    return {
+        "header_row": concept_row,
+        "concept_column": concept_column,
+        "total_column": max(
+            total_columns
+        ),
+    }
+
+
+def read_aif_workbook(
+    content,
+):
+    """
+    Find the AIF sheet inside one official Excel workbook.
+    """
+    excel = pd.ExcelFile(
+        BytesIO(content)
+    )
+
+    for sheet_name in excel.sheet_names:
+        frame = pd.read_excel(
+            excel,
+            sheet_name=sheet_name,
+            header=None,
+        )
+
+        layout = find_sheet_layout(
+            frame
+        )
+
+        if layout:
+            return (
+                frame,
+                layout,
+            )
+
     raise RuntimeError(
-      f"No monthly series found for: {query}"
+        "Could not locate AIF table in workbook"
     )
 
-  # Prefer the series with the most recent endpoint.
-  candidates.sort(
-    key=lambda item:
-      item.get("time_index_end") or "",
-    reverse=True,
-  )
 
-  selected = candidates[0]
+def extract_aif_values(
+    frame,
+    layout,
+):
+    """
+    Extract every required fiscal line from the official TOTAL column.
 
-  LOGGER.info(
-    "%s -> %s | %s",
-    query,
-    selected["id"],
-    selected.get("description"),
-  )
-
-  return selected["id"]
-
-
-def resolve_all_series():
-  """Resolve canonical columns to Datos Argentina IDs."""
-  resolved = {}
-
-  for column, query in AIF_SERIES.items():
-    resolved[column] = resolve_series_id(
-      query,
-      AIF_DATASET,
+    Rows are matched in their published order. If the structure of the
+    official workbook changes, the ETL fails instead of silently using
+    a different row.
+    """
+    concept_column = (
+        layout["concept_column"]
     )
 
-  for column, query in IMIG_SERIES.items():
-    resolved[column] = resolve_series_id(
-      query,
-      IMIG_DATASET,
+    total_column = (
+        layout["total_column"]
     )
 
-  return resolved
-
-
-def chunks(items, size):
-  for index in range(
-    0,
-    len(items),
-    size,
-  ):
-    yield items[index:index + size]
-
-
-def fetch_batch(series_items):
-  """Fetch one group of time series."""
-  columns = [
-    column
-    for column, _ in series_items
-  ]
-
-  ids = [
-    series_id
-    for _, series_id in series_items
-  ]
-
-  response = requests.get(
-    SERIES_URL,
-    params={
-      "ids": ",".join(ids),
-      "last": LAST_PERIODS,
-      "metadata": "none",
-    },
-    timeout=60,
-  )
-  response.raise_for_status()
-
-  data = response.json().get(
-    "data",
-    [],
-  )
-
-  if not data:
-    raise RuntimeError(
-      "Datos Argentina returned no observations"
+    cursor = (
+        layout["header_row"] + 1
     )
 
-  return pd.DataFrame(
-    data,
-    columns=[
-      "period",
-      *columns,
-    ],
-  )
+    result = {}
+
+    for column, aliases in AIF_ROWS:
+        found_row = None
+
+        for row_index in range(
+            cursor,
+            len(frame),
+        ):
+            label = frame.iat[
+                row_index,
+                concept_column,
+            ]
+
+            if row_matches(
+                label,
+                aliases,
+            ):
+                found_row = row_index
+                break
+
+        if found_row is None:
+            expected = " / ".join(
+                aliases
+            )
+
+            raise RuntimeError(
+                "Official AIF workbook structure changed. "
+                f"Could not find row for "
+                f"{column}: {expected}"
+            )
+
+        result[column] = parse_amount(
+            frame.iat[
+                found_row,
+                total_column,
+            ]
+        )
+
+        cursor = found_row + 1
+
+    return result
 
 
-def fetch_fiscal_data(series):
-  """Fetch all resolved fiscal series."""
-  frames = []
-
-  series_items = list(
-    series.items()
-  )
-
-  for batch in chunks(
-    series_items,
-    MAX_SERIES_PER_REQUEST,
-  ):
-    frames.append(
-      fetch_batch(batch)
+def fetch_aif_period(
+    period,
+    url,
+):
+    """
+    Download and parse one official monthly AIF workbook.
+    """
+    response = ONP_SESSION.get(
+        url,
+        timeout=60,
     )
 
-  fiscal = frames[0]
+    response.raise_for_status()
 
-  for frame in frames[1:]:
-    fiscal = fiscal.merge(
-      frame,
-      on="period",
-      how="outer",
+    frame, layout = read_aif_workbook(
+        response.content
     )
 
-  fiscal["period"] = pd.to_datetime(
-    fiscal["period"],
-  ).dt.date
+    values = extract_aif_values(
+        frame,
+        layout,
+    )
 
-  fiscal = (
-    fiscal
-    .sort_values("period")
-    .reset_index(drop=True)
-  )
-
-  LOGGER.info(
-    "Fetched %s fiscal periods from %s through %s",
-    len(fiscal),
-    fiscal["period"].min(),
-    fiscal["period"].max(),
-  )
-
-  return fiscal
+    return {
+        "period": period,
+        **values,
+    }
 
 
-def clean_value(value):
-  """Convert pandas NaN to SQL NULL."""
-  if pd.isna(value):
-    return None
+def fetch_aif_data():
+    """
+    Fetch the latest AIF monthly observations directly from ONP.
+    """
+    links = collect_aif_links(
+        LAST_PERIODS
+    )
 
-  return float(value)
+    rows = []
+
+    for item in links:
+        rows.append(
+            fetch_aif_period(
+                item["period"],
+                item["url"],
+            )
+        )
+
+    frame = pd.DataFrame(
+        rows
+    )
+
+    frame = (
+        frame
+        .sort_values("period")
+        .reset_index(drop=True)
+    )
+
+    LOGGER.info(
+        "Fetched %s AIF periods from %s through %s",
+        len(frame),
+        frame["period"].min(),
+        frame["period"].max(),
+    )
+
+    return frame
+
+
+def fetch_tax_data():
+    """
+    Fetch detailed tax revenue components using fixed IMIG IDs.
+    """
+    columns = list(
+        TAX_SERIES
+    )
+
+    ids = list(
+        TAX_SERIES.values()
+    )
+
+    response = requests.get(
+        SERIES_URL,
+        params={
+            "ids": ",".join(ids),
+            "last": LAST_PERIODS,
+            "metadata": "none",
+        },
+        headers=REQUEST_HEADERS,
+        timeout=60,
+    )
+
+    response.raise_for_status()
+
+    data = response.json().get(
+        "data",
+        [],
+    )
+
+    if not data:
+        raise RuntimeError(
+            "Datos Argentina returned "
+            "no IMIG tax observations"
+        )
+
+    frame = pd.DataFrame(
+        data,
+        columns=[
+            "period",
+            *columns,
+        ],
+    )
+
+    frame["period"] = pd.to_datetime(
+        frame["period"],
+        errors="raise",
+    ).dt.date
+
+    frame = (
+        frame
+        .sort_values("period")
+        .reset_index(drop=True)
+    )
+
+    LOGGER.info(
+        "Fetched %s IMIG tax periods from %s through %s",
+        len(frame),
+        frame["period"].min(),
+        frame["period"].max(),
+    )
+
+    return frame
+
+
+def fetch_fiscal_data():
+    """
+    Merge official AIF rows with the fixed IMIG tax breakdown.
+
+    AIF is the master calendar. A tax series that has not yet been
+    published for an AIF month remains NULL rather than causing the
+    whole fiscal observation to disappear.
+    """
+    aif = fetch_aif_data()
+
+    taxes = fetch_tax_data()
+
+    fiscal = aif.merge(
+        taxes,
+        on="period",
+        how="left",
+    )
+
+    return (
+        fiscal
+        .sort_values("period")
+        .reset_index(drop=True)
+    )
+
+
+def clean_value(
+    value,
+):
+    """
+    Convert pandas NaN into SQL NULL.
+    """
+    if pd.isna(value):
+        return None
+
+    return float(value)
 
 
 def upsert_fiscal(
-  db,
-  fiscal,
-  series,
+    db,
+    fiscal,
 ):
-  """Insert new rows and update revised observations."""
-  value_columns = list(
-    series.keys()
-  )
-
-  columns = [
-    "period",
-    *value_columns,
-  ]
-
-  placeholders = ", ".join(
-    ["%s"] * len(columns)
-  )
-
-  updates = ", ".join(
-    f"{column}=VALUES({column})"
-    for column in value_columns
-  )
-
-  sql = f"""
-    INSERT INTO {TABLE_NAME}
-      ({", ".join(columns)})
-    VALUES
-      ({placeholders})
-    ON DUPLICATE KEY UPDATE
-      {updates}
-  """
-
-  for _, row in fiscal.iterrows():
-    values = [
-      row["period"],
-      *[
-        clean_value(row[column])
-        for column in value_columns
-      ],
+    """
+    Insert new monthly observations and update revisions.
+    """
+    columns = [
+        "period",
+        *VALUE_COLUMNS,
     ]
 
-    db.query(
-      sql,
-      tuple(values),
+    placeholders = ", ".join(
+        ["%s"] * len(columns)
     )
 
-  LOGGER.info(
-    "Stored %s fiscal periods",
-    len(fiscal),
-  )
+    updates = ", ".join(
+        f"{column}=VALUES({column})"
+        for column in VALUE_COLUMNS
+    )
+
+    sql = (
+        f"INSERT INTO {TABLE_NAME} "
+        f"({', '.join(columns)}) "
+        f"VALUES ({placeholders}) "
+        f"ON DUPLICATE KEY UPDATE "
+        f"{updates}"
+    )
+
+    for _, row in fiscal.iterrows():
+        values = [
+            row["period"],
+            *[
+                clean_value(
+                    row.get(column)
+                )
+                for column
+                in VALUE_COLUMNS
+            ],
+        ]
+
+        db.query(
+            sql,
+            tuple(values),
+        )
+
+    LOGGER.info(
+        "Stored %s fiscal periods",
+        len(fiscal),
+    )
 
 
 def main():
-  db = DoltDBManager()
+    fiscal = fetch_fiscal_data()
 
-  try:
-    LOGGER.info(
-      "Resolving official fiscal series"
-    )
+    db = DoltDBManager()
 
-    series = resolve_all_series()
+    try:
+        db.connect()
 
-    LOGGER.info(
-      "Resolved %s series",
-      len(series),
-    )
+        upsert_fiscal(
+            db,
+            fiscal,
+        )
 
-    fiscal = fetch_fiscal_data(
-      series,
-    )
+        db.dolt_add(
+            TABLE_NAME
+        )
 
-    db.connect()
+        result = db.dolt_commit(
+            "Update Argentina fiscal data - "
+            f"{datetime.now():%Y-%m-%d %H:%M:%S}"
+        )
 
-    upsert_fiscal(
-      db,
-      fiscal,
-      series,
-    )
+        LOGGER.info(
+            "Dolt commit result: %s",
+            result,
+        )
 
-    db.dolt_add(
-      TABLE_NAME,
-    )
-
-    result = db.dolt_commit(
-      "Update Argentina fiscal data - "
-      f"{datetime.now():%Y-%m-%d %H:%M:%S}"
-    )
-
-    LOGGER.info(
-      "Dolt commit result: %s",
-      result,
-    )
-
-  finally:
-    db.disconnect()
+    finally:
+        db.disconnect()
 
 
 if __name__ == "__main__":
-  logging.basicConfig(
-    level=logging.INFO,
-    format=(
-      "%(levelname)s:"
-      "%(name)s:"
-      "%(message)s"
-    ),
-  )
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            "%(levelname)s:"
+            "%(name)s:"
+            "%(message)s"
+        ),
+    )
 
-  main()
+    main()
