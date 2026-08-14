@@ -217,7 +217,7 @@ function formatMoney(value) {
     {
       maximumFractionDigits: 0,
     },
-  )} M ARS`
+  )}`
 }
 
 
@@ -618,7 +618,9 @@ function FiscalBalance() {
             )}
           />
         </section>
-
+        <p className="last-updated">
+          Expresado en millones de ARS corrientes. Datos del Sector Público Nacional, incluyendo organismos descentralizados y empresas públicas.
+        </p>
         <ChartCard title="Evolución del resultado financiero">
           <PlotlyChart
             data={[
