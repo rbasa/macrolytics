@@ -21,6 +21,10 @@ const sections = [
     label: 'Análisis UVA',
     to: '/uvaAnalysis',
   },
+  {
+    label: 'Expectativas',
+    to: '/expectations',
+  },
 ]
 
 function HomePage() {

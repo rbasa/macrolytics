@@ -56,3 +56,27 @@ export function formatNumber(
     },
   )
 }
+
+export function formatPointChange(
+  value,
+  decimals = 1,
+) {
+  if (!Number.isFinite(value)) {
+    return 'N/A'
+  }
+
+  const sign = value > 0 ? '+' : ''
+
+  return `${sign}${value.toFixed(decimals)} pts`
+}
+
+export function formatIndex(
+  value,
+  decimals = 1,
+) {
+  if (!Number.isFinite(value)) {
+    return 'N/A'
+  }
+
+  return value.toFixed(decimals)
+}

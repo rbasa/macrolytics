@@ -22,6 +22,10 @@ const links = [
     to: '/fiscal-balance',
   },
   {
+    label: 'Expectativas',
+    to: '/expectations',
+  },
+  {
     label: 'Análisis UVA',
     to: '/uvaAnalysis',
   },

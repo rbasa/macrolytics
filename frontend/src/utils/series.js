@@ -178,3 +178,17 @@ export function sumYTD(
     return sum + (Number(row[valueKey]) || 0)
   }, 0)
 }
+
+export function calculatePointChange(
+  currentValue,
+  previousValue,
+) {
+  if (
+    !Number.isFinite(currentValue) ||
+    !Number.isFinite(previousValue)
+  ) {
+    return null
+  }
+
+  return currentValue - previousValue
+}
