@@ -210,6 +210,8 @@ jobs:
           python etl/populate_trade_arg.py
           echo "Running Argentina Fiscal ETL..."
           python etl/populate_fiscal_arg.py
+          echo "Running Argentina Consumer Confidence ETL..."
+          python etl/populate_consumer_confidence_arg.py
 
           echo "Pushing commits to DoltHub..."
           cd macroeconomia
