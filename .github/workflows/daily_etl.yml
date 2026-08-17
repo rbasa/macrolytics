@@ -19,10 +19,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -42,122 +42,74 @@ jobs:
         run: |
           set -e
           echo "🔐 Configuring Dolt credentials..."
-          
-          # Validate secret is not empty
+
           if [ -z "$DOLT_CREDS_PRIVATE_KEY" ]; then
             echo "❌ DOLT_CREDS_PRIVATE_KEY secret is empty or not set"
             echo "   Please add the JWK content to GitHub Secrets → DOLT_CREDS_PRIVATE_KEY"
             exit 1
           fi
-          
-          # Validate JWK format
+
           echo "   Validating JWK format..."
           if ! echo "$DOLT_CREDS_PRIVATE_KEY" | python3 -c "import json, sys; json.load(sys.stdin)" 2>/dev/null; then
             echo "❌ Invalid JSON in DOLT_CREDS_PRIVATE_KEY"
-            echo "   First 100 chars: $(echo "$DOLT_CREDS_PRIVATE_KEY" | head -c 100)..."
             exit 1
           fi
-          
-          # Check JWK has required fields
+
           if ! echo "$DOLT_CREDS_PRIVATE_KEY" | python3 -c "import json, sys; jwk=json.load(sys.stdin); sys.exit(0 if 'kty' in jwk and 'x' in jwk else 1)" 2>/dev/null; then
             echo "❌ JWK missing required fields (needs 'kty' and 'x')"
             exit 1
           fi
           echo "   ✅ JWK format is valid"
-          
-          # Configure Dolt user
+
           dolt config --global --add user.name "GitHub Actions"
           dolt config --global --add user.email "actions@github.com"
-      
-          # Set up credentials directory
+
           mkdir -p ~/.dolt/creds
           CRED_FILE="$HOME/.dolt/creds/gha-creds.jwk"
-      
-          # Save JWK to file
+
           echo "$DOLT_CREDS_PRIVATE_KEY" > "$CRED_FILE"
           chmod 600 "$CRED_FILE"
-          echo "   ✅ JWK saved to $CRED_FILE"
-      
-          # Import credential and capture the ID that dolt returns
-          echo "   Importing credential..."
+
           IMPORT_OUTPUT=$(dolt creds import "$CRED_FILE" 2>&1)
-          echo "$IMPORT_OUTPUT"
-      
-          # Extract credential ID from import output
-          # Format: "Imported credential: <ID>" or "Credential ID: <ID>"
-          # Try multiple extraction methods
           CRED_ID=$(echo "$IMPORT_OUTPUT" | awk '/[Ii]mported credential:/ {print $3}' | head -n 1)
-          
-          # If that didn't work, try "Credential ID:" format
+
           if [ -z "$CRED_ID" ]; then
             CRED_ID=$(echo "$IMPORT_OUTPUT" | awk '/[Cc]redential [Ii][Dd]:/ {print $3}' | head -n 1)
           fi
-          
-          # If still empty, extract any alphanumeric string that looks like an ID (50+ chars)
+
           if [ -z "$CRED_ID" ]; then
             CRED_ID=$(echo "$IMPORT_OUTPUT" | grep -oE '[a-z0-9]{50,}' | head -n 1)
           fi
-      
+
           if [ -z "$CRED_ID" ]; then
             echo "❌ Could not extract CRED_ID from 'dolt creds import'"
-            echo "   Import output: $IMPORT_OUTPUT"
             exit 1
           fi
-          
-          echo "   ✅ Extracted credential ID: ${CRED_ID:0:20}..."
-      
-          # Use the credential
-          dolt creds use "$CRED_ID" || {
-            echo "⚠️  'dolt creds use' failed, but credential may still work"
-          }
-      
-          echo "✅ Credentials configured (ID: $CRED_ID)"
-          echo "   Available credentials:"
-          dolt creds ls || echo "   (dolt creds ls not available)"
+
+          dolt creds use "$CRED_ID"
+          echo "✅ Dolt credentials configured"
 
       - name: Test Dolt credentials
         run: |
           set -e
-          echo "🧪 Testing Dolt credentials..."
-          echo ""
-          
-          # Test 1: Verify credentials are configured
-          echo "1️⃣  Checking configured credentials..."
+          echo "Testing Dolt credentials..."
+
           if ! dolt creds ls | grep -q .; then
             echo "❌ No credentials found"
             exit 1
           fi
-          echo "   ✅ Credentials found"
-          echo ""
-          
-          # Test 2: Try to clone (this will test authentication)
-          echo "2️⃣  Testing authentication by cloning repository..."
+
           TEST_DIR="test_dolt_auth_$$"
-          if dolt clone rbasa/macroeconomia "$TEST_DIR" 2>&1; then
-            echo "   ✅ Authentication successful!"
+          if dolt clone rbasa/macroeconomia "$TEST_DIR" >/dev/null 2>&1; then
+            echo "✅ Authentication successful"
             rm -rf "$TEST_DIR"
           else
-            CLONE_ERROR=$?
-            echo "   ❌ Authentication failed (exit code: $CLONE_ERROR)"
-            echo ""
-            echo "   Debugging info:"
-            echo "   - Available credentials:"
-            dolt creds ls || echo "     (none)"
-            echo "   - Credential files:"
-            ls -la ~/.dolt/creds/ 2>&1 || echo "     (none)"
-            echo ""
-            echo "   Please verify:"
-            echo "   1. The JWK in GitHub Secret 'DOLT_CREDS_PRIVATE_KEY' is correct"
-            echo "   2. The public key is added to DoltHub: https://www.dolthub.com/settings/credentials"
-            echo "   3. The credential has write permissions for rbasa/macroeconomia"
+            echo "❌ Authentication failed"
             exit 1
           fi
-          echo ""
-          echo "✅ All credential tests passed!"
 
       - name: Clone or update Dolt database
         run: |
-          # Clone the database if it doesn't exist
           if [ ! -d "macroeconomia" ]; then
             dolt clone rbasa/macroeconomia macroeconomia
           else
@@ -174,42 +126,72 @@ jobs:
         run: |
           set -euo pipefail
 
+          cleanup() {
+            if [ -f /tmp/dolt_server.pid ]; then
+              kill "$(cat /tmp/dolt_server.pid)" 2>/dev/null || true
+              rm -f /tmp/dolt_server.pid
+            else
+              pkill -f "dolt sql-server" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
           cd macroeconomia
 
-          # Start server in background and save PID
           nohup dolt sql-server > server.log 2>&1 &
           SERVER_PID=$!
           echo $SERVER_PID > /tmp/dolt_server.pid
 
-          # Wait for server to accept connections (max ~60s)
           echo "Waiting for dolt sql-server to become ready..."
-            for i in {1..60}; do
-              if nc -z localhost 3306 2>/dev/null; then
-                echo "Port 3306 is open!"
-                sleep 2  # Give server a moment to fully initialize
-                break
-              fi
-              echo "  waiting... ($i/60)"
-              sleep 1
-            done
+          SERVER_READY=false
+          for i in {1..60}; do
+            if nc -z localhost 3306 2>/dev/null; then
+              echo "Port 3306 is open!"
+              sleep 2
+              SERVER_READY=true
+              break
+            fi
+            echo "  waiting... ($i/60)"
+            sleep 1
+          done
 
-          # Create user & grants (ignore errors if already present)
+          if [ "$SERVER_READY" != "true" ]; then
+            echo "❌ Dolt SQL server did not become ready"
+            cat server.log || true
+            exit 1
+          fi
+
           dolt sql -q "CREATE USER IF NOT EXISTS 'user'@'localhost' IDENTIFIED BY ''" || true
           dolt sql -q "GRANT ALL PRIVILEGES ON *.* TO 'user'@'localhost'" || true
           dolt sql -q "FLUSH PRIVILEGES" || true
 
           cd ..
 
-          echo "Running Python daily FX and UVA ETL with DOLT_DB=$DOLT_DB, UPDATE_DAYS=$UPDATE_DAYS"
+          echo "Running Python daily FX and UVA ETL..."
           python etl/daily_update.py
+
           echo "Running Argentina IPC ETL..."
           python etl/populate_ipc_arg.py
+
           echo "Running Argentina EMAE ETL..."
           python etl/populate_emae_arg.py
+
           echo "Running Argentina Trade ETL..."
           python etl/populate_trade_arg.py
+
           echo "Running Argentina Fiscal ETL..."
-          python etl/populate_fiscal_arg.py
+          # Temporary, narrowly scoped workaround: economia.gob.ar currently
+          # serves an expired TLS certificate. Disable verification only on the
+          # dedicated ONP session; all other requests keep normal TLS checks.
+          python - <<'PY'
+          import urllib3
+          from etl import populate_fiscal_arg
+
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+          populate_fiscal_arg.ONP_SESSION.verify = False
+          populate_fiscal_arg.main()
+          PY
+
           echo "Running Argentina Consumer Confidence ETL..."
           python etl/populate_consumer_confidence_arg.py
 
@@ -217,17 +199,8 @@ jobs:
           cd macroeconomia
           dolt push origin main
 
-          # Stop server
-          if [ -f /tmp/dolt_server.pid ]; then
-            kill "$(cat /tmp/dolt_server.pid)" || true
-            rm -f /tmp/dolt_server.pid
-          else
-            pkill -f "dolt sql-server" || true
-          fi
-
       - name: Notify on failure
         if: failure()
         run: |
           echo "❌ Daily ETL update failed"
           echo "Check logs for details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          
