@@ -49,7 +49,8 @@ When running in Codex Cloud:
 - Create a new branch for each task.
 - Use descriptive branch names prefixed with `feature/` or `fix/`.
 - Commit changes to that branch.
-- Push only the `feature/*` or `fix/*` branch.
+- Push only the `feature/*`, `fix/*` or `test/*` branch.
+
 - Open a pull request targeting `main`.
 - NEVER merge the pull request.
 - The user will review and merge the pull request manually.
