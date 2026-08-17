@@ -81,6 +81,14 @@ ONP_CA_CERT_PATH = os.path.join(
     "sectigo_public_server_authentication_ca_dv_r36.crt",
 )
 
+# Temporary fallback for the ONP leaf certificate that expired on
+# 2026-08-15. The normal verified connection is always attempted first.
+# Pinning preserves server authentication while ONP renews its certificate.
+ONP_EXPIRED_CERT_SHA256 = (
+    "7A:6C:38:EB:DE:47:23:77:27:E3:85:59:5B:81:66:58:"
+    "EA:B9:6A:20:7B:71:DB:B9:3D:A5:84:EB:D6:1A:46:D2"
+)
+
 
 class ONPTLSAdapter(HTTPAdapter):
     """
@@ -116,6 +124,61 @@ class ONPTLSAdapter(HTTPAdapter):
         )
 
 
+class ONPPinnedTLSAdapter(HTTPAdapter):
+    """
+    Authenticate ONP by certificate fingerprint when its leaf is expired.
+
+    Certificate-chain and date validation are disabled only inside this
+    adapter. urllib3 still rejects the connection unless the server presents
+    the exact pinned certificate. The adapter is mounted only for the ONP
+    origin and is used only after the normal verified request fails because
+    the certificate expired.
+    """
+
+    def __init__(self, fingerprint, *args, **kwargs):
+        self.fingerprint = fingerprint
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(
+        self,
+        connections,
+        maxsize,
+        block=False,
+        **pool_kwargs,
+    ):
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        pool_kwargs["ssl_context"] = context
+        pool_kwargs["assert_fingerprint"] = (
+            self.fingerprint
+        )
+
+        super().init_poolmanager(
+            connections,
+            maxsize,
+            block=block,
+            **pool_kwargs,
+        )
+
+    def cert_verify(
+        self,
+        connection,
+        url,
+        verify,
+        cert,
+    ):
+        # Requests would otherwise restore normal chain validation and reject
+        # the expired certificate before urllib3 can verify its fingerprint.
+        super().cert_verify(
+            connection,
+            url,
+            False,
+            cert,
+        )
+
+
 def create_onp_session():
     """Create a verified HTTP session for the ONP website."""
     session = requests.Session()
@@ -129,7 +192,56 @@ def create_onp_session():
     return session
 
 
+def create_onp_pinned_session(
+    fingerprint=ONP_EXPIRED_CERT_SHA256,
+):
+    """Create the temporary fingerprint-verified ONP fallback session."""
+    session = requests.Session()
+    session.headers.update(
+        REQUEST_HEADERS
+    )
+    session.mount(
+        "https://www.economia.gob.ar/",
+        ONPPinnedTLSAdapter(fingerprint),
+    )
+    return session
+
+
 ONP_SESSION = create_onp_session()
+ONP_PINNED_SESSION = create_onp_pinned_session()
+_ONP_PINNED_FALLBACK_LOGGED = False
+
+
+def get_onp_response(
+    url,
+    timeout=60,
+):
+    """
+    Fetch one ONP resource with normal TLS and a narrowly pinned fallback.
+    """
+    global _ONP_PINNED_FALLBACK_LOGGED
+
+    try:
+        return ONP_SESSION.get(
+            url,
+            timeout=timeout,
+        )
+
+    except requests.exceptions.SSLError as exc:
+        if "certificate has expired" not in str(exc).lower():
+            raise
+
+        if not _ONP_PINNED_FALLBACK_LOGGED:
+            LOGGER.warning(
+                "ONP certificate expired; using the pinned "
+                "certificate fingerprint fallback"
+            )
+            _ONP_PINNED_FALLBACK_LOGGED = True
+
+        return ONP_PINNED_SESSION.get(
+            url,
+            timeout=timeout,
+        )
 
 
 # ------------------------------------------------------------------
@@ -803,7 +915,7 @@ def fetch_aif_links(
         year=year,
     )
 
-    response = ONP_SESSION.get(
+    response = get_onp_response(
         page_url,
         timeout=60,
     )
@@ -1066,7 +1178,7 @@ def fetch_aif_period(
     """
     Download and parse one official monthly AIF workbook.
     """
-    response = ONP_SESSION.get(
+    response = get_onp_response(
         url,
         timeout=60,
     )
