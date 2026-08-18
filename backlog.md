@@ -3,6 +3,15 @@ Secciones
  - Reservas del BCRA 
  - M2
  - tasa de interes
+ - Descomposición de la tasa de préstamos personales y del CFT
+   - Construir una serie mensual histórica que explique la brecha entre la tasa de plazo fijo, la TNA de préstamos personales y el CFT.
+   - Componentes: fondeo, encajes, riesgo de tasa/depreciación, riesgo de crédito, costos operativos, rentabilidad, IIBB, sellos, IVA y otros impuestos.
+   - Priorizar series oficiales del BCRA: tasas activas y pasivas, depósitos, encajes, mora, previsiones y balances del sistema financiero.
+   - Mantener parámetros regulatorios e impositivos versionados, con vigencia temporal y jurisdicción cuando corresponda.
+   - Identificar cada componente como dato oficial, cálculo determinístico o estimación Macrolytics.
+   - Investigar la metodología de Econométrica y documentar cualquier diferencia respecto de su estimación.
+   - Visualizaciones: descomposición para el último mes y evolución histórica de cada componente.
+   - Validar como referencia junio de 2026: plazo fijo 19,9%; TNA 67,2%; CFTNA 82,8%; CFTEA 122,7%.
 
 ## Expectativas
  - Indice confianza la consumidor (UTDT)
