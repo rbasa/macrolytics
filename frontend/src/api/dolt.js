@@ -23,5 +23,15 @@ export async function fetchDolt(sql) {
 
   const payload = await response.json()
 
+  if (
+    payload.query_execution_status
+    && payload.query_execution_status !== 'Success'
+  ) {
+    throw new Error(
+      payload.query_execution_message
+      || 'DoltHub no pudo ejecutar la consulta',
+    )
+  }
+
   return payload.rows ?? []
 }

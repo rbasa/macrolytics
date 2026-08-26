@@ -36,6 +36,24 @@ export function formatPeriod(
 }
 
 
+export function formatDate(
+  period,
+  locale = 'es-AR',
+) {
+  if (!period) {
+    return 'N/A'
+  }
+
+  const date = new Date(`${period}T00:00:00`)
+
+  if (Number.isNaN(date.getTime())) {
+    return 'N/A'
+  }
+
+  return date.toLocaleDateString(locale)
+}
+
+
 export function formatNumber(
   value,
   {

@@ -36,40 +36,26 @@ const FISCAL_QUERY = `
 
 const currentRevenueComposition = [
   {
-    key: 'ingresos_tributarios_total',
-    label: 'Ingresos impositivos',
-  },
-  {
-    key: 'ingresos_aportes_contribuciones_seguridad_social',
-    label: 'Aportes y contribuciones',
-  },
-  {
-    key: 'ingresos_no_tributarios',
-    label: 'Ingresos no impositivos',
-  },
-  {
-    key: 'ingresos_ventas_bienes_servicios_adm_publica',
-    label: 'Ventas de bienes y servicios',
-  },
-  {
-    key: 'ingresos_operacion',
-    label: 'Ingresos de operación',
+    keys: [
+      'ingresos_tributarios_total',
+      'ingresos_aportes_contribuciones_seguridad_social',
+    ],
+    label: 'Tributarios y contribuciones sociales',
   },
   {
     key: 'ingresos_rentas_propiedad_netas',
     label: 'Rentas de la propiedad',
   },
   {
-    key: 'ingresos_transferencias_corrientes',
-    label: 'Transferencias corrientes',
-  },
-  {
-    key: 'ingresos_otros',
-    label: 'Otros ingresos',
-  },
-  {
-    key: 'ingresos_superavit_operativo_empresas_publicas',
-    label: 'Superávit empresas públicas',
+    keys: [
+      'ingresos_no_tributarios',
+      'ingresos_ventas_bienes_servicios_adm_publica',
+      'ingresos_operacion',
+      'ingresos_transferencias_corrientes',
+      'ingresos_otros',
+      'ingresos_superavit_operativo_empresas_publicas',
+    ],
+    label: 'Otros ingresos corrientes',
   },
 ]
 
@@ -114,7 +100,57 @@ const taxComposition = [
 ]
 
 
-const currentExpenseComposition = [
+const imigExpenseComposition = [
+  {
+    keys: [
+      'imig_gasto_prestaciones_jubilaciones',
+      'imig_gasto_prestaciones_pensiones_no_contributivas',
+      'imig_gasto_prestaciones_asignaciones',
+      'imig_gasto_prestaciones_otros_programas',
+      'imig_gasto_prestaciones_inssjp',
+    ],
+    label: 'Prestaciones sociales',
+  },
+  {
+    keys: [
+      'imig_gasto_subsidios_energia',
+      'imig_gasto_subsidios_transporte',
+      'imig_gasto_subsidios_otras_funciones',
+    ],
+    label: 'Subsidios económicos',
+  },
+  {
+    keys: [
+      'imig_gasto_funcionamiento_salarios',
+      'imig_gasto_funcionamiento_otros',
+    ],
+    label: 'Gastos de funcionamiento y otros',
+  },
+  {
+    keys: [
+      'imig_gasto_provincias_desarrollo_social',
+      'imig_gasto_provincias_educacion',
+      'imig_gasto_provincias_salud',
+      'imig_gasto_provincias_seguridad_social',
+      'imig_gasto_provincias_otras',
+    ],
+    label: 'Transferencias corrientes a provincias',
+  },
+  {
+    key: 'imig_gasto_transferencias_universidades',
+    label: 'Transferencias a universidades',
+  },
+  {
+    keys: [
+      'imig_gasto_otros_deficit_empresas_publicas',
+      'imig_gasto_otros_resto',
+    ],
+    label: 'Otros gastos corrientes',
+  },
+]
+
+
+const aifExpenseComposition = [
   {
     key: 'gastos_consumo_operacion_total',
     label: 'Consumo y operación',
@@ -125,7 +161,7 @@ const currentExpenseComposition = [
   },
   {
     key: 'gastos_prestaciones_seguridad_social',
-    label: 'Prestaciones seguridad social',
+    label: 'Prestaciones de la seguridad social',
   },
   {
     key: 'gastos_otros_corrientes',
@@ -141,7 +177,7 @@ const currentExpenseComposition = [
   },
   {
     key: 'gastos_deficit_operativo_empresas_publicas',
-    label: 'Déficit empresas públicas',
+    label: 'Déficit de empresas públicas',
   },
 ]
 
@@ -197,17 +233,47 @@ function sumColumn(rows, column) {
 }
 
 
+function primaryExpense(row) {
+  return (
+    (Number(row.gastos_antes_figurativos) || 0) -
+    (Number(row.gastos_intereses_netos) || 0)
+  )
+}
+
+
+function sumPrimaryExpense(rows) {
+  return rows.reduce(
+    (sum, row) => sum + primaryExpense(row),
+    0,
+  )
+}
+
+
 function getComposition(
   rows,
   columns,
 ) {
   return columns.map((column) => ({
     label: column.label,
-    value: sumColumn(
-      rows,
-      column.key,
-    ),
+    value: (column.keys ?? [column.key])
+      .reduce(
+        (total, key) =>
+          total + sumColumn(rows, key),
+        0,
+      ),
   }))
+}
+
+
+function hasCompleteComposition(
+  row,
+  columns,
+) {
+  return columns.every((column) =>
+    (column.keys ?? [column.key]).every(
+      (key) => Number.isFinite(row[key]),
+    ),
+  )
 }
 
 
@@ -301,6 +367,52 @@ function FiscalBalance() {
       latestMonth,
     )
 
+    const latestTaxRow = rows.findLast(
+      (row) => hasCompleteComposition(
+        row,
+        taxComposition,
+      ),
+    )
+
+    const latestTaxDate = latestTaxRow
+      ? new Date(
+        `${latestTaxRow.period}T00:00:00`,
+      )
+      : null
+
+    const latestExpenseRow = rows.findLast(
+      (row) => hasCompleteComposition(
+        row,
+        imigExpenseComposition,
+      ),
+    )
+
+    const latestExpenseDate = latestExpenseRow
+      ? new Date(
+        `${latestExpenseRow.period}T00:00:00`,
+      )
+      : null
+
+    const taxYtdRows = latestTaxDate
+      ? getYtdRows(
+        rows,
+        latestTaxDate.getFullYear(),
+        latestTaxDate.getMonth() + 1,
+      )
+      : []
+
+    const expenseYtdRows = latestExpenseDate
+      ? getYtdRows(
+        rows,
+        latestExpenseDate.getFullYear(),
+        latestExpenseDate.getMonth() + 1,
+      )
+      : currentYtdRows
+
+    const expenseColumns = latestExpenseRow
+      ? imigExpenseComposition
+      : aifExpenseComposition
+
     const previousYtdRows = getYtdRows(
       rows,
       previousYear,
@@ -309,34 +421,32 @@ function FiscalBalance() {
 
     const revenueYtd = sumColumn(
       currentYtdRows,
-      'ingresos_despues_figurativos',
+      'ingresos_antes_figurativos',
     )
 
     const previousRevenueYtd = sumColumn(
       previousYtdRows,
-      'ingresos_despues_figurativos',
+      'ingresos_antes_figurativos',
     )
 
-    const primaryExpenseYtd = sumColumn(
+    const primaryExpenseYtd = sumPrimaryExpense(
       currentYtdRows,
-      'gastos_primarios_despues_figurativos',
     )
 
     const previousPrimaryExpenseYtd =
-      sumColumn(
+      sumPrimaryExpense(
         previousYtdRows,
-        'gastos_primarios_despues_figurativos',
       )
 
     const totalExpenseYtd = sumColumn(
       currentYtdRows,
-      'gastos_despues_figurativos',
+      'gastos_antes_figurativos',
     )
 
     const previousTotalExpenseYtd =
       sumColumn(
         previousYtdRows,
-        'gastos_despues_figurativos',
+        'gastos_antes_figurativos',
       )
 
     const primaryResultYtd = sumColumn(
@@ -371,24 +481,38 @@ function FiscalBalance() {
         rows,
         {
           valueKey:
-            'ingresos_despues_figurativos',
+            'ingresos_antes_figurativos',
           periodKey: 'period',
         },
       )
+
+    const primaryExpenseRows = rows.map(
+      (row) => ({
+        ...row,
+        gastos_primarios_consolidados:
+          primaryExpense(row),
+      }),
+    )
 
     const primaryExpenseSeries =
       calculateSeriesVariations(
-        rows,
+        primaryExpenseRows,
         {
           valueKey:
-            'gastos_primarios_despues_figurativos',
+            'gastos_primarios_consolidados',
           periodKey: 'period',
         },
       )
 
+    const taxRows = rows.filter(
+      (row) => Number.isFinite(
+        row.ingresos_tributarios_iva,
+      ),
+    )
+
     const ivaSeries =
       calculateSeriesVariations(
-        rows,
+        taxRows,
         {
           valueKey:
             'ingresos_tributarios_iva',
@@ -398,6 +522,12 @@ function FiscalBalance() {
 
     return {
       latestRow,
+      latestTaxPeriod:
+        latestTaxRow?.period ?? null,
+      latestExpensePeriod:
+        latestExpenseRow?.period ?? latestRow.period,
+      expenseSource:
+        latestExpenseRow ? 'IMIG' : 'AIF',
 
       revenueYtd,
       primaryExpenseYtd,
@@ -455,8 +585,8 @@ function FiscalBalance() {
 
       expenseComposition:
         getComposition(
-          currentYtdRows,
-          currentExpenseComposition,
+          expenseYtdRows,
+          expenseColumns,
         ),
 
       transferComposition:
@@ -473,7 +603,7 @@ function FiscalBalance() {
 
       taxComposition:
         getComposition(
-          currentYtdRows,
+          taxYtdRows,
           taxComposition,
         ),
     }
@@ -514,6 +644,38 @@ function FiscalBalance() {
 
   const latestRow = analysis.latestRow
 
+  const aifPeriod = formatPeriod(
+    latestRow.period,
+  )
+
+  const taxPeriod = formatPeriod(
+    analysis.latestTaxPeriod,
+  )
+
+  const expensePeriod = formatPeriod(
+    analysis.latestExpensePeriod,
+  )
+
+  const taxCoverageNote =
+    analysis.latestTaxPeriod === latestRow.period
+      ? `Fuente IMIG. Distribuye los ingresos impositivos; no incluye contribuciones a la seguridad social ni operaciones figurativas. Datos hasta ${taxPeriod}.`
+      : `Fuente IMIG. Distribuye los ingresos impositivos; no incluye contribuciones a la seguridad social ni operaciones figurativas. Datos hasta ${taxPeriod}; el balance AIF llega hasta ${aifPeriod}.`
+
+  const expenseUsesImig =
+    analysis.expenseSource === 'IMIG'
+
+  const expenseChartTitle = expenseUsesImig
+    ? 'Composición del gasto corriente primario IMIG YTD'
+    : 'Composición del gasto corriente AIF YTD'
+
+  const expenseCoverageNote = expenseUsesImig
+    ? (
+      analysis.latestExpensePeriod === latestRow.period
+        ? `Fuente IMIG. Gasto corriente primario consolidado: excluye intereses, gasto de capital y operaciones figurativas. Datos hasta ${expensePeriod}.`
+        : `Fuente IMIG. Gasto corriente primario consolidado: excluye intereses, gasto de capital y operaciones figurativas. Datos hasta ${expensePeriod}; el balance AIF llega hasta ${aifPeriod}.`
+    )
+    : `Incluye intereses y muestra la apertura contable del gasto corriente antes de figurativos. Datos hasta ${aifPeriod}.`
+
   const balanceSeries = rows.map(
     (row) => ({
       period: row.period,
@@ -552,14 +714,14 @@ function FiscalBalance() {
       <main>
         <section className="stats">
           <StatCard
-            label="Ingresos YTD"
+            label="Ingresos consolidados YTD"
             value={formatMoney(
               analysis.revenueYtd,
             )}
           />
 
           <StatCard
-            label="Gasto total (Primario + Intereses) YTD"
+            label="Gasto total consolidado YTD"
             value={formatMoney(
               analysis.totalExpenseYtd,
             )}
@@ -575,14 +737,14 @@ function FiscalBalance() {
 
         <section className="stats">
           <StatCard
-            label="Ingresos YTD vs año anterior"
+            label="Ingresos consolidados YTD vs año anterior"
             value={formatPercentage(
               analysis.revenueYtdVariation,
             )}
           />
 
           <StatCard
-            label="Gasto total YTD vs año anterior"
+            label="Gasto total consolidado YTD vs año anterior"
             value={formatPercentage(
               analysis.totalExpenseYtdVariation,
             )}
@@ -598,16 +760,16 @@ function FiscalBalance() {
 
         <section className="stats">
           <StatCard
-            label="Últimos ingresos"
+            label="Últimos ingresos consolidados"
             value={formatMoney(
-              latestRow.ingresos_despues_figurativos,
+              latestRow.ingresos_antes_figurativos,
             )}
           />
 
           <StatCard
-            label="Último gasto total"
+            label="Último gasto total consolidado"
             value={formatMoney(
-              latestRow.gastos_despues_figurativos,
+              latestRow.gastos_antes_figurativos,
             )}
           />
 
@@ -619,7 +781,7 @@ function FiscalBalance() {
           />
         </section>
         <p className="last-updated">
-          Expresado en millones de ARS corrientes. Datos del Sector Público Nacional, incluyendo organismos descentralizados y empresas públicas.
+          Expresado en millones de ARS corrientes. Ingresos y gastos consolidados antes de operaciones figurativas del Sector Público Nacional.
         </p>
         <ChartCard title="Evolución del resultado financiero">
           <PlotlyChart
@@ -646,7 +808,7 @@ function FiscalBalance() {
           />
         </ChartCard>
 
-        <ChartCard title="Variación interanual de ingresos y gasto primario">
+        <ChartCard title="Variación interanual de ingresos y gasto primario consolidados">
           <PlotlyChart
             data={[
               createBarTrace(
@@ -686,19 +848,38 @@ function FiscalBalance() {
           />
         </ChartCard>
 
+        <p className="chart-description">
+          Las composiciones siguientes muestran
+          flujos consolidados del Sector Público
+          Nacional y no incorporan operaciones
+          figurativas. AIF presenta la clasificación
+          contable de la Cuenta
+          Ahorro-Inversión-Financiamiento; IMIG
+          reagrupa ingresos y gastos para el informe
+          mensual.
+        </p>
+
         <div className="chart-row">
-          <ChartCard title="Composición de gastos corrientes YTD">
+          <ChartCard
+            title={expenseChartTitle}
+            subtitle={expenseCoverageNote}
+          >
             <PlotlyChart
               data={[
                 createPieTrace(
                   analysis.expenseComposition,
-                  'Gastos corrientes',
+                  expenseUsesImig
+                    ? 'Gasto corriente primario'
+                    : 'Gasto corriente AIF',
                 ),
               ]}
             />
           </ChartCard>
 
-          <ChartCard title="Transferencias corrientes YTD">
+          <ChartCard
+            title="Transferencias corrientes AIF YTD"
+            subtitle={`Fuente AIF. Transferencias incluidas en el gasto corriente antes de figurativos, clasificadas por sector receptor. Datos hasta ${aifPeriod}.`}
+          >
             <PlotlyChart
               data={[
                 createPieTrace(
@@ -711,7 +892,10 @@ function FiscalBalance() {
         </div>
 
         <div className="chart-row">
-          <ChartCard title="Composición de ingresos corrientes YTD">
+          <ChartCard
+            title="Composición de ingresos corrientes AIF YTD"
+            subtitle={`Fuente AIF. Ingresos corrientes antes de figurativos; no incluye recursos de capital. Datos hasta ${aifPeriod}.`}
+          >
             <PlotlyChart
               data={[
                 createPieTrace(
@@ -722,7 +906,10 @@ function FiscalBalance() {
             />
           </ChartCard>
 
-          <ChartCard title="Composición de ingresos tributarios YTD">
+          <ChartCard
+            title="Composición de ingresos impositivos IMIG YTD"
+            subtitle={taxCoverageNote}
+          >
             <PlotlyChart
               data={[
                 createPieTrace(
@@ -734,7 +921,10 @@ function FiscalBalance() {
           </ChartCard>
         </div>
 
-        <ChartCard title="IVA - Variación interanual">
+        <ChartCard
+          title="IVA - Variación interanual"
+          subtitle={taxCoverageNote}
+        >
           <PlotlyChart
             data={[
               createBarTrace(

@@ -18,12 +18,16 @@ const sections = [
     to: '/fiscal-balance',
   },
   {
-    label: 'Análisis UVA',
-    to: '/uvaAnalysis',
-  },
-  {
     label: 'Expectativas',
     to: '/expectations',
+  },
+  {
+    label: 'Sector Financiero',
+    to: '/financial-sector',
+  },
+  {
+    label: 'Análisis UVA',
+    to: '/uvaAnalysis',
   },
 ]
 

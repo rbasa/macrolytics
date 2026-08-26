@@ -1,4 +1,4 @@
-function StatCard({ label, value }) {
+function StatCard({ label, value, subinfo }) {
   return (
     <article className="stat-card">
       <div className="stat-label">
@@ -8,6 +8,12 @@ function StatCard({ label, value }) {
       <div className="stat-value">
         {value}
       </div>
+
+      {subinfo && (
+        <div className="stat-subinfo">
+          {subinfo}
+        </div>
+      )}
     </article>
   )
 }

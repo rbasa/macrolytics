@@ -171,6 +171,7 @@ jobs:
           DOLT_DB: "mysql://user:@localhost:3306/macroeconomia"
           UPDATE_DAYS: ${{ github.event.inputs.days_back || '7' }}
           IPC_LAST_PERIODS: '5'
+          FINANCIAL_DAYS_BACK: '30'
         run: |
           set -euo pipefail
 
@@ -212,6 +213,8 @@ jobs:
           python etl/populate_fiscal_arg.py
           echo "Running Argentina Consumer Confidence ETL..."
           python etl/populate_consumer_confidence_arg.py
+          echo "Running Argentina Financial Sector ETL..."
+          python etl/populate_financial_sector_arg.py
 
           echo "Pushing commits to DoltHub..."
           cd macroeconomia
@@ -230,4 +233,3 @@ jobs:
         run: |
           echo "❌ Daily ETL update failed"
           echo "Check logs for details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          

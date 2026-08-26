@@ -12,6 +12,7 @@ import TradeBalance from './pages/TradeBalance.jsx'
 import UvaAnalysis from './pages/UvaAnalysis.jsx'
 import FiscalBalance from './pages/FiscalBalance.jsx'
 import Expectations from './pages/Expectations.jsx'
+import FinancialSector from './pages/FinancialSector.jsx'
 
 function App() {
   return (
@@ -48,6 +49,10 @@ function App() {
         <Route
           path="expectations"
           element={<Expectations />}
+        />
+        <Route
+          path="financial-sector"
+          element={<FinancialSector />}
         />
       </Route>
     </Routes>

@@ -26,6 +26,10 @@ const links = [
     to: '/expectations',
   },
   {
+    label: 'Sector Financiero',
+    to: '/financial-sector',
+  },
+  {
     label: 'Análisis UVA',
     to: '/uvaAnalysis',
   },
