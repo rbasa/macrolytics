@@ -4,7 +4,6 @@
 import logging
 import os
 import re
-import ssl
 import sys
 import unicodedata
 from datetime import date, datetime
@@ -14,7 +13,6 @@ from urllib.parse import urljoin, urlparse
 
 import pandas as pd
 import requests
-from requests.adapters import HTTPAdapter
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -26,73 +24,31 @@ TABLE_NAME = "fiscal_argentina"
 AIF_START_YEAR = 2017
 LAST_PERIODS = int(os.getenv("FISCAL_LAST_PERIODS", "6"))
 
-ONP_PAGE_URL = "https://www.economia.gob.ar/onp/ejecucion/{year}"
+# `www.economia.gob.ar` currently presents an expired leaf certificate and
+# redirects to this official Ministry of Economy host. Using the canonical
+# target avoids weakening TLS while keeping the same ONP-published workbooks.
+ONP_PAGE_URL = "https://www.mecon.gob.ar/onp/ejecucion/{year}"
 SERIES_URL = "https://apis.datos.gob.ar/series/api/series"
 REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Macrolytics/1.0)"}
-ONP_CA_CERT_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "certs",
-    "sectigo_public_server_authentication_ca_dv_r36.crt",
-)
-
-# ONP's leaf certificate expired on 2026-08-15. The fallback remains authenticated
-# by its exact fingerprint and is used only while the normally verified request fails
-# specifically because of that expiry. Once ONP renews it, normal TLS wins again.
-ONP_EXPIRED_CERT_SHA256 = (
-    "7A:6C:38:EB:DE:47:23:77:27:E3:85:59:5B:81:66:58:"
-    "EA:B9:6A:20:7B:71:DB:B9:3D:A5:84:EB:D6:1A:46:D2"
-)
+MAX_SOURCE_LAG_MONTHS = 2
 
 
-class ONPPinnedTLSAdapter(HTTPAdapter):
-    """Accept only the known expired ONP certificate in the fallback session."""
-
-    def __init__(self, fingerprint=ONP_EXPIRED_CERT_SHA256):
-        self.fingerprint = fingerprint
-        super().__init__()
-
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        pool_kwargs.update(
-            ssl_context=context,
-            assert_fingerprint=self.fingerprint,
-        )
-        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
-
-    def cert_verify(self, connection, url, verify, cert):
-        # Let urllib3 verify the fingerprint before Requests rejects the expiry.
-        super().cert_verify(connection, url, False, cert)
+class ONPStructureError(RuntimeError):
+    """The official ONP page responded but no longer has the expected shape."""
 
 
-def make_session(adapter=None):
+def make_session():
     session = requests.Session()
     session.headers.update(REQUEST_HEADERS)
-    if adapter:
-        session.mount("https://www.economia.gob.ar/", adapter)
     return session
 
 
 ONP_SESSION = make_session()
-ONP_PINNED_SESSION = make_session(ONPPinnedTLSAdapter())
-_ONP_PINNED_FALLBACK_LOGGED = False
 
 
 def get_onp_response(url, timeout=60):
-    """Fetch ONP with normal TLS, or the exact pinned expired certificate."""
-    global _ONP_PINNED_FALLBACK_LOGGED
-
-    try:
-        # ONP omits this intermediate CA from its TLS chain.
-        return ONP_SESSION.get(url, timeout=timeout, verify=ONP_CA_CERT_PATH)
-    except requests.exceptions.SSLError as exc:
-        if "certificate has expired" not in str(exc).lower():
-            raise
-        if not _ONP_PINNED_FALLBACK_LOGGED:
-            LOGGER.warning("ONP certificate expired; using pinned fingerprint")
-            _ONP_PINNED_FALLBACK_LOGGED = True
-        return ONP_PINNED_SESSION.get(url, timeout=timeout)
+    """Fetch one ONP resource with normal CA and hostname validation."""
+    return ONP_SESSION.get(url, timeout=timeout)
 
 
 # Fixed official IMIG IDs. Never replace these with fuzzy metadata matching.
@@ -306,16 +262,53 @@ class AIFPageParser(HTMLParser):
 
 def fetch_aif_links(year):
     page_url = ONP_PAGE_URL.format(year=year)
-    response = get_onp_response(page_url)
-    response.raise_for_status()
+    LOGGER.info("Fetching ONP AIF index for %s: %s", year, page_url)
+    try:
+        response = get_onp_response(page_url)
+    except requests.exceptions.SSLError as exc:
+        LOGGER.error("ONP TLS validation failed for %s: %s", page_url, exc)
+        raise
+
+    if response.status_code == 404:
+        LOGGER.warning("Skipping unavailable ONP year %s: %s", year, page_url)
+        return []
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        LOGGER.error(
+            "ONP HTTP error for year %s at %s: %s",
+            year,
+            page_url,
+            exc,
+        )
+        raise
+
     if not response.encoding:
         response.encoding = response.apparent_encoding
+    if not response.text.strip():
+        raise ONPStructureError(
+            f"ONP returned an empty execution page for {year}: {page_url}"
+        )
     parser = AIFPageParser()
     parser.feed(response.text)
-    return [
-        {"period": date(year, month, 1), "url": urljoin(page_url, href)}
+    links = [
+        {
+            "period": date(year, month, 1),
+            "url": urljoin(response.url or page_url, href),
+        }
         for month, href in parser.links.items()
     ]
+    if not links:
+        raise ONPStructureError(
+            "ONP execution page structure changed or has no monthly AIF "
+            f"workbooks for {year}: {page_url}"
+        )
+    LOGGER.info("Found %s monthly ONP AIF workbooks for %s", len(links), year)
+    return links
+
+
+def month_distance(later, earlier):
+    return (later.year - earlier.year) * 12 + later.month - earlier.month
 
 
 def collect_aif_links(last_periods):
@@ -323,15 +316,54 @@ def collect_aif_links(last_periods):
     if last_periods <= 0:
         raise ValueError("FISCAL_LAST_PERIODS must be positive")
     current_year = date.today().year
-    start_year = AIF_START_YEAR if last_periods >= 100 else max(AIF_START_YEAR, current_year - 1)
-    links = [
-        link
-        for year in range(start_year, current_year + 1)
-        for link in fetch_aif_links(year)
-    ]
+    start_year = (
+        AIF_START_YEAR
+        if last_periods >= 100
+        else max(AIF_START_YEAR, current_year - 1)
+    )
+    links = []
+    omitted_years = []
+    for year in range(start_year, current_year + 1):
+        year_links = fetch_aif_links(year)
+        if not year_links:
+            omitted_years.append(year)
+        links.extend(year_links)
+
     if not links:
         raise RuntimeError("No monthly AIF Excel files were found")
-    return sorted(links, key=lambda item: item["period"])[-last_periods:]
+    if last_periods >= 100 and omitted_years:
+        raise RuntimeError(
+            "Cannot safely backfill fiscal history because ONP years are "
+            f"unavailable: {', '.join(map(str, omitted_years))}"
+        )
+
+    selected = sorted(links, key=lambda item: item["period"])[-last_periods:]
+    if last_periods < 100 and len(selected) < last_periods:
+        raise RuntimeError(
+            f"ONP supplied only {len(selected)} of {last_periods} required "
+            "monthly AIF workbooks"
+        )
+
+    latest_period = selected[-1]["period"]
+    lag = month_distance(date.today(), latest_period)
+    if lag > MAX_SOURCE_LAG_MONTHS:
+        raise RuntimeError(
+            "Latest ONP AIF workbook is stale: "
+            f"{latest_period:%Y-%m} ({lag} months behind current month)"
+        )
+    if omitted_years:
+        LOGGER.warning(
+            "Omitted ONP years %s; selected range remains complete and fresh",
+            ", ".join(map(str, omitted_years)),
+        )
+
+    LOGGER.info(
+        "Selected %s ONP AIF periods from %s through %s",
+        len(selected),
+        selected[0]["period"],
+        selected[-1]["period"],
+    )
+    return selected
 
 
 def find_sheet_layout(frame):
@@ -397,8 +429,18 @@ def extract_aif_values(frame, layout):
 
 
 def fetch_aif_period(period, url):
-    response = get_onp_response(url)
-    response.raise_for_status()
+    LOGGER.info("Fetching ONP AIF workbook for %s: %s", period, url)
+    try:
+        response = get_onp_response(url)
+        response.raise_for_status()
+    except requests.exceptions.SSLError as exc:
+        LOGGER.error("ONP TLS validation failed for workbook %s: %s", url, exc)
+        raise
+    except requests.exceptions.HTTPError as exc:
+        LOGGER.error("ONP HTTP error for workbook %s: %s", url, exc)
+        raise
+    if not response.content:
+        raise RuntimeError(f"ONP returned an empty AIF workbook for {period}: {url}")
     frame, layout = read_aif_workbook(response.content)
     return {"period": period, **extract_aif_values(frame, layout)}
 
@@ -440,12 +482,22 @@ def fetch_imig_data():
 
 def fetch_fiscal_data():
     """Use AIF as calendar; unavailable tax observations remain NULL."""
-    return (
+    fiscal = (
         fetch_aif_data()
-        .merge(fetch_imig_data(), on="period", how="left")
+        .merge(
+            fetch_imig_data(),
+            on="period",
+            how="left",
+            validate="one_to_one",
+        )
         .sort_values("period")
         .reset_index(drop=True)
     )
+    if fiscal.empty:
+        raise RuntimeError("Fiscal sources returned no valid observations")
+    if fiscal["period"].isna().any() or fiscal["period"].duplicated().any():
+        raise RuntimeError("Fiscal sources produced invalid or duplicate periods")
+    return fiscal
 
 
 def clean_value(value):
@@ -453,6 +505,11 @@ def clean_value(value):
 
 
 def upsert_fiscal(db, fiscal):
+    if fiscal.empty:
+        raise ValueError("Cannot upsert an empty fiscal dataset")
+    if fiscal["period"].duplicated().any():
+        raise ValueError("Cannot upsert duplicate fiscal periods")
+
     columns = ["period", *VALUE_COLUMNS]
     placeholders = ", ".join(["%s"] * len(columns))
     updates = ", ".join(f"{column}=VALUES({column})" for column in VALUE_COLUMNS)
@@ -460,9 +517,30 @@ def upsert_fiscal(db, fiscal):
         f"INSERT INTO {TABLE_NAME} ({', '.join(columns)}) VALUES ({placeholders}) "
         f"ON DUPLICATE KEY UPDATE {updates}"
     )
+    counts = {"inserted": 0, "updated": 0, "unchanged": 0}
     for row in fiscal.to_dict("records"):
-        db.query(sql, (row["period"], *(clean_value(row.get(column)) for column in VALUE_COLUMNS)))
-    LOGGER.info("Stored %s fiscal periods", len(fiscal))
+        result = db.query(
+            sql,
+            (
+                row["period"],
+                *(clean_value(row.get(column)) for column in VALUE_COLUMNS),
+            ),
+        )
+        affected = result[0].get("affected_rows", 0) if result else 0
+        if affected == 1:
+            counts["inserted"] += 1
+        elif affected == 2:
+            counts["updated"] += 1
+        else:
+            counts["unchanged"] += 1
+    LOGGER.info(
+        "Stored %s fiscal periods: %s inserted, %s updated, %s unchanged",
+        len(fiscal),
+        counts["inserted"],
+        counts["updated"],
+        counts["unchanged"],
+    )
+    return counts
 
 
 def main():
