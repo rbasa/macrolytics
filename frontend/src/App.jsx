@@ -7,7 +7,7 @@ import {
 import Layout from './components/Layout.jsx'
 import HomePage from './pages/HomePage.jsx'
 import Inflation from './pages/Inflation.jsx'
-import EconomicActivity from './pages/EconomicActivity.jsx'
+import EconomicActivity from './pages/economicActivity/EconomicActivity.jsx'
 import TradeBalance from './pages/TradeBalance.jsx'
 import UvaAnalysis from './pages/UvaAnalysis.jsx'
 import FiscalBalance from './pages/FiscalBalance.jsx'

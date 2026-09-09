@@ -8,19 +8,19 @@ Próximos indicadores
  - [x] M2
  - [x] tasa de interés (BADLAR bancos privados, TNA)
  - [x] BCRA compra de dólares por día
- - [ ] Hoja de balance
- - [ ] Base monetaria
+ - [x] Hoja de balance
+ - [x] Base monetaria
  - [x] Ratio base monetaria sobre reservas
- - [ ] Créditos
-   - [ ] Total de créditos
-   - [ ] Morosidad
-   - [ ] Total de mora
-   - [ ] Créditos en USD
+ - [x] Créditos
+   - [x] Total de créditos
+   - [x] Morosidad
+   - [x] Total de mora
+   - [x] Créditos en USD
 
 ## Expectativas
  - [x] Indice confianza la consumidor (UTDT)
  - [ ] ICP?
- - [ ] Imagen del gobierno?
+ - [ ] Índice de confianza al gobierno
 
 ## Precios
  - variacion acumulada en el año

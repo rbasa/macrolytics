@@ -35,6 +35,28 @@ export function formatPeriod(
   )
 }
 
+export function formatQuarter(period) {
+  if (!period) {
+    return 'N/A'
+  }
+
+  const [year, month] = String(period)
+    .slice(0, 7)
+    .split('-')
+    .map(Number)
+
+  if (
+    !Number.isInteger(year)
+    || !Number.isInteger(month)
+    || month < 1
+    || month > 12
+  ) {
+    return 'N/A'
+  }
+
+  return `T${Math.ceil(month / 3)} ${year}`
+}
+
 
 export function formatDate(
   period,

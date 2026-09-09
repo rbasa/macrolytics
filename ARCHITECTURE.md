@@ -51,6 +51,7 @@ GitHub Pages.
 │ Monthly macro datasets                                      │
 │   populate_ipc_arg.py                                       │
 │   populate_emae_arg.py                                      │
+│   populate_pbi_arg.py                                       │
 │   populate_trade_arg.py                                     │
 │   populate_fiscal_arg.py                                    │
 │   populate_consumer_confidence_arg.py                       │
@@ -82,6 +83,10 @@ GitHub Pages.
 │ fx_rate                                                     │
 │ ipc_argentina                                               │
 │ emae                                                        │
+│ pbi_argentina_precios_2004                                  │
+│ pbi_argentina_precios_corrientes                            │
+│ pbi_demanda_argentina_precios_2004                          │
+│ pbi_demanda_argentina_precios_corrientes                    │
 │ trade_argentina                                             │
 │ fiscal_argentina                                            │
 │ consumer_confidence_argentina                               │
@@ -436,6 +441,35 @@ Contains:
 - seasonally adjusted index
 - trend-cycle index
 - sector-level activity indices
+
+## Quarterly GDP
+
+Source:
+
+```text
+Datos Argentina
+Underlying source: INDEC quarterly national accounts
+```
+
+ETL:
+
+```text
+etl/populate_pbi_arg.py
+```
+
+Tables:
+
+```text
+pbi_argentina_precios_2004
+pbi_argentina_precios_corrientes
+pbi_demanda_argentina_precios_2004
+pbi_demanda_argentina_precios_corrientes
+```
+
+The production and expenditure datasets are each split into constant-price and
+current-price tables. The constant-price tables also contain the published
+seasonally adjusted aggregates. Growth rates are derived in the analytical
+layer rather than persisted as source observations.
 
 ---
 
@@ -822,7 +856,10 @@ frontend/
 │   ├── pages/
 │   │   ├── HomePage.jsx
 │   │   ├── Inflation.jsx
-│   │   ├── EconomicActivity.jsx
+│   │   ├── economicActivity/
+│   │   │   ├── EconomicActivity.jsx
+│   │   │   ├── PbiAnalysis.jsx
+│   │   │   └── EmaeAnalysis.jsx
 │   │   ├── TradeBalance.jsx
 │   │   ├── FiscalBalance.jsx
 │   │   ├── UvaAnalysis.jsx
@@ -1062,6 +1099,7 @@ The workflow currently runs:
 daily_update.py
 populate_ipc_arg.py
 populate_emae_arg.py
+populate_pbi_arg.py
 populate_trade_arg.py
 populate_fiscal_arg.py
 ```

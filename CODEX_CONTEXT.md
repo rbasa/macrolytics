@@ -59,7 +59,9 @@ Pages:
 
 - HomePage.jsx
 - Inflation.jsx
-- EconomicActivity.jsx
+- economicActivity/EconomicActivity.jsx
+- economicActivity/PbiAnalysis.jsx
+- economicActivity/EmaeAnalysis.jsx
 - TradeBalance.jsx
 - FiscalBalance.jsx
 - UvaAnalysis.jsx
@@ -95,6 +97,27 @@ we observed inconsistent behavior when querying the IPC general index alone.
 ETL:
 
 etl/populate_emae_arg.py
+
+### Quarterly GDP
+
+Tables:
+
+- pbi_argentina_precios_2004
+- pbi_argentina_precios_corrientes
+- pbi_demanda_argentina_precios_2004
+- pbi_demanda_argentina_precios_corrientes
+
+ETL:
+
+etl/populate_pbi_arg.py
+
+Source:
+
+Datos Argentina / INDEC quarterly national accounts, using fixed series IDs.
+
+The tables keep constant 2004 and current prices separate. Seasonally adjusted
+volume aggregates live in the constant-price tables. Analytical growth rates
+should be derived outside the ETL.
 
 ### Trade
 
