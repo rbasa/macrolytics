@@ -458,23 +458,113 @@ def _latest_bank_report_workbook(*, session=requests) -> bytes:
     if not publications:
         raise ValueError("BCRA bank-report index returned no publications")
 
-    report_url = publications[0].get("url")
-    report = session.get(report_url, timeout=45)
-    report.raise_for_status()
-    workbook_match = re.search(
-        r'href=["\']([^"\']*informe-bancos-serie[^"\']*\.xlsx)["\']',
-        report.text,
-        re.I,
-    )
-    if not workbook_match:
-        raise ValueError("Latest BCRA bank report has no data-series workbook")
+    for publication in publications:
+        report_url = publication.get("url")
+        if not report_url:
+            continue
 
-    workbook = session.get(
-        urljoin(report_url, workbook_match.group(1)),
-        timeout=60,
+        report = session.get(report_url, timeout=45)
+        report.raise_for_status()
+        workbook_match = re.search(
+            r'href=["\']([^"\']*informe-bancos-serie[^"\']*\.xlsx(?:\?[^"\']*)?)["\']',
+            report.text,
+            re.I,
+        )
+        if not workbook_match:
+            LOGGER.warning(
+                "BCRA bank report %s has no data-series workbook; trying the previous report",
+                publication.get("periodo", report_url),
+            )
+            continue
+
+        workbook_url = urljoin(report_url, workbook_match.group(1))
+        workbook = session.get(workbook_url, timeout=60)
+        workbook.raise_for_status()
+        LOGGER.info(
+            "Using BCRA bank-report workbook for %s",
+            publication.get("periodo", workbook_url),
+        )
+        return workbook.content
+
+    raise ValueError("BCRA bank reports have no available data-series workbook")
+
+
+def _credit_quality_column_indexes(sheet) -> dict[str, int | None]:
+    """Locate published delinquency ratios from the workbook headers."""
+    header_rows = list(sheet.iter_rows(
+        min_row=1,
+        max_row=min(15, sheet.max_row),
+        values_only=True,
+    ))
+    group_starts: dict[str, int] = {}
+    direct_columns: dict[str, int] = {}
+    ratio_columns: set[int] = set()
+
+    for row in header_rows:
+        for column, value in enumerate(row):
+            label = " ".join(str(value or "").casefold().split())
+            if not label:
+                continue
+
+            is_ratio_column = (
+                (
+                    "ratio de irregularidad" in label
+                    and "crédito" not in label
+                )
+                or (
+                    "non-performing ratio" in label
+                    and "financing" not in label
+                )
+            )
+            if is_ratio_column:
+                ratio_columns.add(column)
+            if "sector privado" in label or "private sector" in label:
+                group_starts.setdefault("private", column)
+            elif "familias" in label or "households" in label:
+                group_starts.setdefault("households", column)
+            elif "empresas" in label or "companies" in label:
+                group_starts.setdefault("companies", column)
+            elif label in {"sistema", "system"}:
+                direct_columns.setdefault("private", column)
+
+            if label in {"familias", "households"}:
+                direct_columns.setdefault("households", column)
+            elif label in {"empresas", "companies"}:
+                direct_columns.setdefault("companies", column)
+
+    indexes: dict[str, int | None] = {
+        "private": None,
+        "companies": None,
+        "households": None,
+    }
+    ordered_groups = sorted(
+        group_starts.items(),
+        key=lambda item: item[1],
     )
-    workbook.raise_for_status()
-    return workbook.content
+    for position, (group, start_column) in enumerate(ordered_groups):
+        end_column = (
+            ordered_groups[position + 1][1]
+            if position + 1 < len(ordered_groups)
+            else sheet.max_column
+        )
+        indexes[group] = next(
+            (
+                column
+                for column in sorted(ratio_columns)
+                if start_column <= column < end_column
+            ),
+            None,
+        )
+
+    for group, column in direct_columns.items():
+        if indexes[group] is None:
+            indexes[group] = column
+
+    if indexes["private"] is None:
+        raise ValueError(
+            "BCRA bank-report workbook has no private-sector delinquency column"
+        )
+    return indexes
 
 
 def fetch_credit_quality(
@@ -489,6 +579,7 @@ def fetch_credit_quality(
         data_only=True,
     )
     sheet = workbook["8"]
+    indexes = _credit_quality_column_indexes(sheet)
     rows = []
 
     for values in sheet.iter_rows(values_only=True):
@@ -499,16 +590,23 @@ def fetch_credit_quality(
             period = raw_period
         else:
             continue
-        if period < start_date or values[1] is None:
+        private_value = values[indexes["private"]]
+        if period < start_date or private_value is None:
             continue
         rows.append({
             "periodo": period,
-            "morosidad_sector_privado_porcentaje": Decimal(str(values[1])),
+            "morosidad_sector_privado_porcentaje": Decimal(str(private_value)),
             "morosidad_empresas_porcentaje": (
-                Decimal(str(values[6])) if values[6] is not None else None
+                Decimal(str(values[indexes["companies"]]))
+                if indexes["companies"] is not None
+                and values[indexes["companies"]] is not None
+                else None
             ),
             "morosidad_familias_porcentaje": (
-                Decimal(str(values[7])) if values[7] is not None else None
+                Decimal(str(values[indexes["households"]]))
+                if indexes["households"] is not None
+                and values[indexes["households"]] is not None
+                else None
             ),
         })
 

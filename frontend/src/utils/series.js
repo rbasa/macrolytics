@@ -139,6 +139,49 @@ export function calculateLatestVariations(
     annual,
   }
 }
+
+
+export function calculateLatestIncidences(
+  rows,
+  columns,
+  {
+    totalKey,
+    annualLag = 12,
+  },
+) {
+  if (rows.length < annualLag + 1) {
+    return []
+  }
+
+  const latestRow = rows.at(-1)
+  const previousYearRow = rows.at(
+    -(annualLag + 1),
+  )
+  const previousTotal = previousYearRow[totalKey]
+
+  if (!Number.isFinite(previousTotal) || previousTotal === 0) {
+    return []
+  }
+
+  return columns
+    .map((column) => {
+      const latestValue = latestRow[column.key]
+      const previousValue = previousYearRow[column.key]
+
+      return {
+        key: column.key,
+        label: column.label,
+        value: Number.isFinite(latestValue) && Number.isFinite(previousValue)
+          ? ((latestValue - previousValue) / previousTotal) * 100
+          : null,
+      }
+    })
+    .sort((left, right) => {
+      if (!Number.isFinite(left.value)) return 1
+      if (!Number.isFinite(right.value)) return -1
+      return right.value - left.value
+    })
+}
 export function sumLastPeriods(
   rows,
   valueKey,

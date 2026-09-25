@@ -16,6 +16,12 @@ on:
 jobs:
   update-data:
     runs-on: ubuntu-latest
+    env:
+      DOLT_DB: "mysql://user:@localhost:3306/macroeconomia"
+      UPDATE_DAYS: ${{ github.event.inputs.days_back || '7' }}
+      IPC_LAST_PERIODS: '5'
+      PBI_LAST_PERIODS: '8'
+      FINANCIAL_DAYS_BACK: '30'
 
     steps:
       - name: Checkout repository
@@ -29,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-workflow.txt
 
       - name: Install Dolt
         run: |
@@ -166,13 +172,8 @@ jobs:
             cd ..
           fi
 
-      - name: Start Dolt SQL Server and run ETL
-        env:
-          DOLT_DB: "mysql://user:@localhost:3306/macroeconomia"
-          UPDATE_DAYS: ${{ github.event.inputs.days_back || '7' }}
-          IPC_LAST_PERIODS: '5'
-          PBI_LAST_PERIODS: '8'
-          FINANCIAL_DAYS_BACK: '30'
+      - name: Start Dolt SQL server
+        id: start_dolt
         run: |
           set -euo pipefail
 
@@ -183,53 +184,187 @@ jobs:
           SERVER_PID=$!
           echo $SERVER_PID > /tmp/dolt_server.pid
 
-          # Wait for server to accept connections (max ~60s)
           echo "Waiting for dolt sql-server to become ready..."
-            for i in {1..60}; do
-              if nc -z localhost 3306 2>/dev/null; then
-                echo "Port 3306 is open!"
-                sleep 2  # Give server a moment to fully initialize
-                break
-              fi
-              echo "  waiting... ($i/60)"
-              sleep 1
-            done
+          ready=0
+          for i in {1..60}; do
+            if nc -z localhost 3306 2>/dev/null; then
+              ready=1
+              echo "Port 3306 is open!"
+              sleep 2
+              break
+            fi
+            echo "  waiting... ($i/60)"
+            sleep 1
+          done
 
-          # Create user & grants (ignore errors if already present)
+          if [ "$ready" -ne 1 ]; then
+            echo "Dolt SQL server did not become ready"
+            cat server.log
+            exit 1
+          fi
+
+      - name: Configure Dolt SQL user
+        run: |
+          set -euo pipefail
+          cd macroeconomia
           dolt sql -q "CREATE USER IF NOT EXISTS 'user'@'localhost' IDENTIFIED BY ''" || true
           dolt sql -q "GRANT ALL PRIVILEGES ON *.* TO 'user'@'localhost'" || true
           dolt sql -q "FLUSH PRIVILEGES" || true
 
-          cd ..
+      - name: ETL - FX and UVA
+        id: etl_fx_uva
+        continue-on-error: true
+        run: |
+          echo "Running FX and UVA ETL with UPDATE_DAYS=$UPDATE_DAYS"
+          python etl/daily_update.py || {
+            status=$?
+            echo "FX and UVA ETL failed; discarding its uncommitted changes."
+            cd macroeconomia
+            dolt reset --hard HEAD
+            exit "$status"
+          }
 
-          echo "Running Python daily FX and UVA ETL with DOLT_DB=$DOLT_DB, UPDATE_DAYS=$UPDATE_DAYS"
-          python etl/daily_update.py
-          echo "Running Argentina IPC ETL..."
-          python etl/populate_ipc_arg.py
-          echo "Running Argentina EMAE ETL..."
-          python etl/populate_emae_arg.py
-          echo "Running Argentina quarterly GDP ETL..."
-          python etl/populate_pbi_arg.py
-          echo "Running Argentina Trade ETL..."
-          python etl/populate_trade_arg.py
-          echo "Running Argentina Fiscal ETL..."
-          python etl/populate_fiscal_arg.py
-          echo "Running Argentina Consumer Confidence ETL..."
-          python etl/populate_consumer_confidence_arg.py
-          echo "Running Argentina Financial Sector ETL..."
-          python etl/populate_financial_sector_arg.py
+      - name: ETL - Argentina IPC
+        id: etl_ipc
+        continue-on-error: true
+        run: |
+          python etl/populate_ipc_arg.py || {
+            status=$?
+            echo "IPC ETL failed; discarding its uncommitted changes."
+            cd macroeconomia
+            dolt reset --hard HEAD
+            exit "$status"
+          }
 
-          echo "Pushing commits to DoltHub..."
+      - name: ETL - Argentina EMAE
+        id: etl_emae
+        continue-on-error: true
+        run: |
+          python etl/populate_emae_arg.py || {
+            status=$?
+            echo "EMAE ETL failed; discarding its uncommitted changes."
+            cd macroeconomia
+            dolt reset --hard HEAD
+            exit "$status"
+          }
+
+      - name: ETL - Argentina quarterly GDP
+        id: etl_pbi
+        continue-on-error: true
+        run: |
+          python etl/populate_pbi_arg.py || {
+            status=$?
+            echo "Quarterly GDP ETL failed; discarding its uncommitted changes."
+            cd macroeconomia
+            dolt reset --hard HEAD
+            exit "$status"
+          }
+
+      - name: ETL - Argentina Trade
+        id: etl_trade
+        continue-on-error: true
+        run: |
+          python etl/populate_trade_arg.py || {
+            status=$?
+            echo "Trade ETL failed; discarding its uncommitted changes."
+            cd macroeconomia
+            dolt reset --hard HEAD
+            exit "$status"
+          }
+
+      - name: ETL - Argentina Fiscal
+        id: etl_fiscal
+        continue-on-error: true
+        run: |
+          python etl/populate_fiscal_arg.py || {
+            status=$?
+            echo "Fiscal ETL failed; discarding its uncommitted changes."
+            cd macroeconomia
+            dolt reset --hard HEAD
+            exit "$status"
+          }
+
+      - name: ETL - Argentina Consumer Confidence
+        id: etl_confidence
+        continue-on-error: true
+        run: |
+          python etl/populate_consumer_confidence_arg.py || {
+            status=$?
+            echo "Consumer confidence ETL failed; discarding its uncommitted changes."
+            cd macroeconomia
+            dolt reset --hard HEAD
+            exit "$status"
+          }
+
+      - name: ETL - Argentina Financial Sector
+        id: etl_financial
+        continue-on-error: true
+        run: |
+          python etl/populate_financial_sector_arg.py || {
+            status=$?
+            echo "Financial sector ETL failed; discarding its uncommitted changes."
+            cd macroeconomia
+            dolt reset --hard HEAD
+            exit "$status"
+          }
+
+      - name: Push successful ETL commits to DoltHub
+        id: push_commits
+        if: ${{ always() && steps.start_dolt.outcome == 'success' }}
+        run: |
+          set -euo pipefail
           cd macroeconomia
           dolt push origin main
 
-          # Stop server
+      - name: Stop Dolt SQL server
+        if: always()
+        run: |
           if [ -f /tmp/dolt_server.pid ]; then
             kill "$(cat /tmp/dolt_server.pid)" || true
             rm -f /tmp/dolt_server.pid
           else
             pkill -f "dolt sql-server" || true
           fi
+
+      - name: Write ETL summary
+        if: always()
+        run: |
+          {
+            echo "## Daily ETL results"
+            echo ""
+            echo "| ETL | Result |"
+            echo "| --- | --- |"
+            echo "| FX and UVA | ${{ steps.etl_fx_uva.outcome }} |"
+            echo "| IPC | ${{ steps.etl_ipc.outcome }} |"
+            echo "| EMAE | ${{ steps.etl_emae.outcome }} |"
+            echo "| Quarterly GDP | ${{ steps.etl_pbi.outcome }} |"
+            echo "| Trade | ${{ steps.etl_trade.outcome }} |"
+            echo "| Fiscal | ${{ steps.etl_fiscal.outcome }} |"
+            echo "| Consumer confidence | ${{ steps.etl_confidence.outcome }} |"
+            echo "| Financial sector | ${{ steps.etl_financial.outcome }} |"
+            echo "| DoltHub push | ${{ steps.push_commits.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail job if any ETL failed
+        if: always()
+        run: |
+          outcomes=(
+            "${{ steps.etl_fx_uva.outcome }}"
+            "${{ steps.etl_ipc.outcome }}"
+            "${{ steps.etl_emae.outcome }}"
+            "${{ steps.etl_pbi.outcome }}"
+            "${{ steps.etl_trade.outcome }}"
+            "${{ steps.etl_fiscal.outcome }}"
+            "${{ steps.etl_confidence.outcome }}"
+            "${{ steps.etl_financial.outcome }}"
+          )
+
+          for outcome in "${outcomes[@]}"; do
+            if [ "$outcome" = "failure" ]; then
+              echo "At least one ETL failed; successful commits were pushed first."
+              exit 1
+            fi
+          done
 
       - name: Notify on failure
         if: failure()

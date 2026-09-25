@@ -58,6 +58,34 @@ export function formatQuarter(period) {
 }
 
 
+export function quarterEndPeriod(period) {
+  const [year, month] = String(period)
+    .slice(0, 7)
+    .split('-')
+    .map(Number)
+
+  if (
+    !Number.isInteger(year)
+    || !Number.isInteger(month)
+    || month < 1
+    || month > 12
+  ) {
+    return period
+  }
+
+  const quarterEndMonth = Math.ceil(month / 3) * 3
+  const quarterEndDay = new Date(
+    Date.UTC(year, quarterEndMonth, 0),
+  ).getUTCDate()
+
+  return [
+    year,
+    String(quarterEndMonth).padStart(2, '0'),
+    String(quarterEndDay).padStart(2, '0'),
+  ].join('-')
+}
+
+
 export function formatDate(
   period,
   locale = 'es-AR',

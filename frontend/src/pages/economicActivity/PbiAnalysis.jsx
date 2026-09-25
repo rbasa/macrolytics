@@ -5,15 +5,16 @@ import ChartCard from '../../components/ChartCard.jsx'
 import PlotlyChart from '../../components/PlotlyChart.jsx'
 import StatCard from '../../components/StatCard.jsx'
 import {
+  calculateLatestIncidences,
   calculateLatestVariations,
   calculateSeriesVariations,
   calculateVariation,
   normalizeNumericRows,
 } from '../../utils/series.js'
 import {
-  formatNumber,
   formatPercentage,
   formatQuarter,
+  quarterEndPeriod,
 } from '../../utils/formatters.js'
 import {
   createBarTrace,
@@ -23,8 +24,6 @@ import {
 
 const PBI_CONSTANT_QUERY =
   'SELECT * FROM pbi_argentina_precios_2004 ORDER BY periodo ASC'
-const PBI_CURRENT_QUERY =
-  'SELECT periodo, pib FROM pbi_argentina_precios_corrientes ORDER BY periodo ASC'
 const DEMAND_CONSTANT_QUERY =
   'SELECT * FROM pbi_demanda_argentina_precios_2004 ORDER BY periodo ASC'
 
@@ -44,21 +43,29 @@ const sectorColumns = [
   ['ensenanza', 'Enseñanza'],
   ['servicios_sociales_salud', 'Salud'],
   ['otras_actividades_servicios_comunitarios', 'Otros servicios'],
+  ['hogares_servicio_domestico', 'Servicio doméstico'],
 ].map(([key, label]) => ({ key, label }))
 
 const demandColumns = [
   ['consumo_privado', 'Consumo privado'],
-  ['consumo_publico', 'Consumo público'],
+  ['consumo_publico', 'Gasto público (consumo público)'],
   ['formacion_bruta_capital_fijo', 'Inversión fija'],
   ['exportaciones', 'Exportaciones'],
   ['importaciones', 'Importaciones'],
 ].map(([key, label]) => ({ key, label }))
 
 
+function withQuarterEndPeriods(values) {
+  return values.map((item) => ({
+    ...item,
+    period: quarterEndPeriod(item.period),
+  }))
+}
+
+
 function PbiAnalysis() {
   const [data, setData] = useState({
     pbi: [],
-    currentPbi: [],
     demand: [],
   })
   const [loading, setLoading] = useState(true)
@@ -69,9 +76,8 @@ function PbiAnalysis() {
 
     async function loadPbi() {
       try {
-        const [pbiRows, currentRows, demandRows] = await Promise.all([
+        const [pbiRows, demandRows] = await Promise.all([
           fetchDolt(PBI_CONSTANT_QUERY),
-          fetchDolt(PBI_CURRENT_QUERY),
           fetchDolt(DEMAND_CONSTANT_QUERY),
         ])
 
@@ -82,7 +88,6 @@ function PbiAnalysis() {
         if (!cancelled) {
           setData({
             pbi: normalizeNumericRows(pbiRows, ['periodo']),
-            currentPbi: normalizeNumericRows(currentRows, ['periodo']),
             demand: normalizeNumericRows(demandRows, ['periodo']),
           })
         }
@@ -123,7 +128,8 @@ function PbiAnalysis() {
         periodKey: 'periodo',
         annualLag: 4,
       }),
-      sectors: calculateLatestVariations(data.pbi, sectorColumns, {
+      sectors: calculateLatestIncidences(data.pbi, sectorColumns, {
+        totalKey: 'pib',
         annualLag: 4,
       }),
       demand: calculateLatestVariations(data.demand, demandColumns, {
@@ -148,12 +154,44 @@ function PbiAnalysis() {
   const previousYear = data.pbi.at(-5)
   const latestDemand = data.demand.at(-1)
   const previousYearDemand = data.demand.at(-5)
-  const latestCurrent = data.currentPbi.at(-1)
+
+  const componentCards = [
+    {
+      label: 'Consumo privado interanual',
+      current: latestDemand.consumo_privado,
+      previous: previousYearDemand.consumo_privado,
+    },
+    {
+      label: 'Inversión fija interanual',
+      current: latestDemand.formacion_bruta_capital_fijo,
+      previous: previousYearDemand.formacion_bruta_capital_fijo,
+    },
+    {
+      label: 'Gasto público interanual',
+      current: latestDemand.consumo_publico,
+      previous: previousYearDemand.consumo_publico,
+    },
+    {
+      label: 'Impuestos netos de subsidios interanual',
+      current: latest.impuestos_productos_netos_subsidios,
+      previous: previousYear.impuestos_productos_netos_subsidios,
+    },
+    {
+      label: 'Exportaciones interanual',
+      current: latestDemand.exportaciones,
+      previous: previousYearDemand.exportaciones,
+    },
+    {
+      label: 'Importaciones interanual',
+      current: latestDemand.importaciones,
+      previous: previousYearDemand.importaciones,
+    },
+  ]
 
   return (
     <section className="activity-section activity-section--primary" id="pbi">
       <div className="activity-section-heading">
-        <p className="activity-kicker">Ancla trimestral</p>
+        <p className="activity-kicker">Frecuencia trimestral</p>
         <h2>Producto Interno Bruto</h2>
         <p>
           Cuentas Nacionales a precios de 2004: nivel de actividad,
@@ -170,6 +208,7 @@ function PbiAnalysis() {
           value={formatPercentage(
             calculateVariation(latest.pib, previousYear.pib),
           )}
+          subinfo="Precios constantes de 2004"
         />
         <StatCard
           label="PBI trimestral desestacionalizado"
@@ -177,42 +216,36 @@ function PbiAnalysis() {
             latest.pib_desestacionalizado,
             previous.pib_desestacionalizado,
           ))}
+          subinfo="Vs. trimestre anterior · precios constantes de 2004"
         />
-        <StatCard
-          label="Consumo privado interanual"
-          value={formatPercentage(calculateVariation(
-            latestDemand.consumo_privado,
-            previousYearDemand.consumo_privado,
-          ))}
-        />
-        <StatCard
-          label="Inversión fija interanual"
-          value={formatPercentage(calculateVariation(
-            latestDemand.formacion_bruta_capital_fijo,
-            previousYearDemand.formacion_bruta_capital_fijo,
-          ))}
-        />
-        <StatCard
-          label="PBI a precios corrientes"
-          value={formatNumber(latestCurrent?.pib, {
-            maximumFractionDigits: 0,
-          })}
-          subinfo="Millones de pesos"
-        />
+      </div>
+
+      <div className="stats pbi-stats pbi-component-stats">
+        {componentCards.map((card) => (
+          <StatCard
+            key={card.label}
+            label={card.label}
+            value={formatPercentage(calculateVariation(
+              card.current,
+              card.previous,
+            ))}
+            subinfo="Precios constantes de 2004"
+          />
+        ))}
       </div>
 
       <ChartCard
         title="PBI a precios de 2004"
-        subtitle="Serie original y serie desestacionalizada, en millones de pesos de 2004."
+        subtitle="Serie original y desestacionalizada, en millones de pesos constantes de 2004. La tendencia-ciclo oficial aún no está disponible en la base de datos."
       >
         <PlotlyChart
           data={[
             createLineTrace(data.pbi.map((row) => ({
-              period: row.periodo,
+              period: quarterEndPeriod(row.periodo),
               value: row.pib,
             })), 'PBI original'),
             createLineTrace(data.pbi.map((row) => ({
-              period: row.periodo,
+              period: quarterEndPeriod(row.periodo),
               value: row.pib_desestacionalizado,
             })), 'PBI desestacionalizado'),
           ]}
@@ -226,18 +259,20 @@ function PbiAnalysis() {
       </ChartCard>
 
       <ChartCard
-        title="Crecimiento del PBI"
-        subtitle="Interanual sobre la serie original y trimestral sobre la serie desestacionalizada."
+        title="Crecimiento del PBI real"
+        subtitle="Precios constantes de 2004: variación interanual de la serie original y variación trimestral de la serie desestacionalizada."
       >
         <PlotlyChart
           data={[
             createBarTrace(
-              analysis.pbi.annual.slice(-32),
+              withQuarterEndPeriods(analysis.pbi.annual.slice(-32)),
               'Interanual',
               { xKey: 'period', yKey: 'value' },
             ),
             createBarTrace(
-              analysis.seasonallyAdjusted.monthly.slice(-32),
+              withQuarterEndPeriods(
+                analysis.seasonallyAdjusted.monthly.slice(-32),
+              ),
               'Trimestral desestacionalizada',
               { xKey: 'period', yKey: 'value' },
             ),
@@ -253,23 +288,23 @@ function PbiAnalysis() {
 
       <div className="chart-row">
         <ChartCard
-          title="Sectores productivos"
-          subtitle="Variación interanual real del último trimestre."
+          title="Incidencia sectorial en el crecimiento del PBI"
+          subtitle="Aporte a la variación interanual del PBI real en puntos porcentuales, ordenado de mayor a menor incidencia."
         >
           <PlotlyChart
             data={[
-              createBarTrace(analysis.sectors.annual, 'Interanual'),
+              createBarTrace(analysis.sectors, 'Incidencia'),
             ]}
             layout={{
               xaxis: { title: 'Sector', automargin: true },
-              yaxis: { title: 'Variación %' },
+              yaxis: { title: 'Puntos porcentuales' },
             }}
           />
         </ChartCard>
 
         <ChartCard
           title="Componentes de la demanda"
-          subtitle="Variación interanual real del último trimestre."
+          subtitle="Variación interanual a precios constantes de 2004. El consumo público es el gasto de consumo final del gobierno; no está neteado de impuestos."
         >
           <PlotlyChart
             data={[

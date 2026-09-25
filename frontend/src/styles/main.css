@@ -164,6 +164,190 @@ h1 {
   padding: 24px 0 48px;
 }
 
+.economic-calendar {
+  width: min(1050px, 100%);
+  margin: 0 auto 42px;
+}
+
+.economic-calendar-heading {
+  margin-bottom: 16px;
+
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.economic-calendar-heading h2 {
+  margin: 3px 0 0;
+
+  color: #2d3748;
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
+}
+
+.economic-calendar-heading a {
+  color: #667eea;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.economic-calendar-heading a:hover {
+  text-decoration: underline;
+}
+
+.economic-calendar-kicker {
+  margin: 0;
+
+  color: #667eea;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.economic-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.economic-calendar-panel {
+  min-width: 0;
+  padding: 20px;
+
+  background: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 6px 18px rgba(45, 55, 72, 0.08);
+}
+
+.economic-calendar-panel-heading {
+  margin-bottom: 12px;
+
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.economic-calendar-panel-heading h3 {
+  margin: 0;
+
+  color: #2d3748;
+  font-size: 1rem;
+}
+
+.economic-calendar-status {
+  width: 9px;
+  height: 9px;
+
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.economic-calendar-status--recent {
+  background: #48bb78;
+  box-shadow: 0 0 0 4px rgba(72, 187, 120, 0.14);
+}
+
+.economic-calendar-status--upcoming {
+  background: #667eea;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.14);
+}
+
+.economic-calendar-list {
+  margin: 0;
+  padding: 0;
+
+  list-style: none;
+}
+
+.economic-calendar-item + .economic-calendar-item {
+  border-top: 1px solid #e2e8f0;
+}
+
+.economic-calendar-link {
+  min-height: 66px;
+  padding: 10px 4px;
+
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+
+  color: inherit;
+  text-decoration: none;
+  border-radius: 8px;
+
+  transition: background 150ms ease;
+}
+
+.economic-calendar-link:hover {
+  background: #edf2f7;
+}
+
+.economic-calendar-date {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  color: #667eea;
+  font-style: normal;
+  line-height: 1;
+}
+
+.economic-calendar-day {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.economic-calendar-month {
+  margin-top: 4px;
+
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.economic-calendar-copy {
+  min-width: 0;
+
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.economic-calendar-copy strong {
+  color: #2d3748;
+  font-size: 0.9rem;
+  line-height: 1.25;
+}
+
+.economic-calendar-copy > span {
+  color: #718096;
+  font-size: 0.75rem;
+}
+
+.economic-calendar-arrow {
+  color: #a0aec0;
+  font-size: 1rem;
+}
+
+.economic-calendar-empty {
+  margin: 22px 0;
+
+  color: #718096;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.economic-calendar-note {
+  margin: 10px 2px 0;
+
+  color: #718096;
+  font-size: 0.75rem;
+}
+
 .home-sections {
   width: min(650px, 100%);
   margin: 0 auto;
@@ -556,6 +740,11 @@ h1 {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.pbi-component-stats {
+  margin-top: -10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .chart-column,
 .chart-column--wide {
   width: 100%;
@@ -651,6 +840,16 @@ footer a:hover {
     padding: 16px 0 36px;
   }
 
+  .economic-calendar-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .economic-calendar-grid {
+    grid-template-columns: 1fr;
+  }
+
   .chart-container {
     margin: 20px 0;
     padding: 12px;
@@ -665,6 +864,10 @@ footer a:hover {
   }
 
   .financial-credit-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pbi-component-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -725,6 +928,10 @@ footer a:hover {
   }
 
   .financial-credit-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .pbi-component-stats {
     grid-template-columns: 1fr;
   }
 

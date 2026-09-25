@@ -1,0 +1,7 @@
+# Runtime dependencies used by .github/workflows/daily_etl.yml.
+pandas>=1.5
+requests>=2.25.0
+pymysql>=1.0.0
+openpyxl
+pdfplumber
+xlrd>=2.0.1

@@ -129,15 +129,26 @@ class FinancialSectorETLTest(unittest.TestCase):
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "8"
-        sheet.append(["Fecha", "Sistema", None, None, None, None, "Empresas", "Familias"])
+        sheet.append(["Informe sobre Bancos", None, None, None, None, None, None, None])
+        sheet.append([None, "Sector privado / Private sector", None, None, None, "Familias / Households", None, None])
+        sheet.append([
+            "Fecha",
+            "Var. % mensual del saldo real total",
+            "Var. % mensual del saldo real irregular",
+            "Ratio de Irregularidad (eje der.)",
+            None,
+            "Var. % mensual del saldo real total",
+            "Var. % mensual del saldo real irregular",
+            "Ratio de Irregularidad (eje der.)",
+        ])
         sheet.append([
             datetime(2026, 6, 1),
+            2.63,
+            1.70,
             7.63,
             None,
-            None,
-            None,
-            None,
-            3.5,
+            0.85,
+            0.65,
             12.77,
         ])
         content = BytesIO()
@@ -154,6 +165,55 @@ class FinancialSectorETLTest(unittest.TestCase):
         self.assertEqual(
             rows[0]["morosidad_sector_privado_porcentaje"],
             Decimal("7.63"),
+        )
+        self.assertIsNone(rows[0]["morosidad_empresas_porcentaje"])
+        self.assertEqual(
+            rows[0]["morosidad_familias_porcentaje"],
+            Decimal("12.77"),
+        )
+
+    def test_bank_report_workbook_falls_back_to_previous_publication(self):
+        index_response = Mock()
+        index_response.raise_for_status.return_value = None
+        index_response.json.return_value = {
+            "data": {"publicaciones": [
+                {
+                    "periodo": "Julio 2026",
+                    "url": "https://www.bcra.gob.ar/report/latest/",
+                },
+                {
+                    "periodo": "Junio 2026",
+                    "url": "https://www.bcra.gob.ar/report/previous/",
+                },
+            ]},
+        }
+        latest_report = Mock()
+        latest_report.raise_for_status.return_value = None
+        latest_report.text = "<html><body>Publication pending</body></html>"
+        previous_report = Mock()
+        previous_report.raise_for_status.return_value = None
+        previous_report.text = (
+            '<a href="/files/informe-bancos-serie-2026-06.xlsx?download=1">'
+            "Series</a>"
+        )
+        workbook_response = Mock()
+        workbook_response.raise_for_status.return_value = None
+        workbook_response.content = b"xlsx-content"
+        session = Mock()
+        session.get.side_effect = [
+            index_response,
+            latest_report,
+            previous_report,
+            workbook_response,
+        ]
+
+        content = financial._latest_bank_report_workbook(session=session)
+
+        self.assertEqual(content, b"xlsx-content")
+        session.get.assert_called_with(
+            "https://www.bcra.gob.ar/files/"
+            "informe-bancos-serie-2026-06.xlsx?download=1",
+            timeout=60,
         )
 
     def test_fetch_reserve_liquidity_filters_and_parses_index(self):
